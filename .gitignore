@@ -1,0 +1,33 @@
+# --- Geheimen en persoonlijke gegevens: NOOIT online zetten ---
+# Spotify Client ID en Secret (gebruik config.example.env als voorbeeld)
+config.env
+config.env.bak*
+# Je Spotify-login (toegangstoken)
+.spotify-cache
+.cache
+# Wat je op het scherm instelt (o.a. je woonplaats voor het weer)
+instellingen.json
+instellingen.tmp
+
+# --- Python ---
+.venv/
+venv/
+__pycache__/
+*.py[cod]
+
+# --- Besturingssystemen en editors ---
+.DS_Store
+Thumbs.db
+desktop.ini
+.vscode/
+.idea/
+*.swp
+
+# --- Nextcloud-synchronisatie ---
+.sync_*.db*
+.owncloudsync.log*
+*.part
+
+# --- Diversen ---
+*.log
+*.bak

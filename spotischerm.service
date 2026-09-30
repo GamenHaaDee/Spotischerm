@@ -1,0 +1,16 @@
+[Unit]
+Description=SpotiScherm (Spotify-bediening op het touchscreen)
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+User=__USER__
+WorkingDirectory=__DIR__
+Environment=SDL_VIDEODRIVER=kmsdrm
+Environment=PYTHONUNBUFFERED=1
+ExecStart=__DIR__/.venv/bin/python app/spotischerm.py
+Restart=always
+RestartSec=5
+
+[Install]
+WantedBy=multi-user.target
