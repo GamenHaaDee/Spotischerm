@@ -37,6 +37,8 @@ Läuft auf einem Raspberry Pi, vom allerersten Pi 1 bis zum Pi 5.
 - **Warteschlange:** sehen, was als Nächstes kommt.
 - **Songtext:** Tippe auf das Albumcover. Die Texte kommen von [LRCLIB](https://lrclib.net) und
   laufen meistens mit dem Titel mit.
+- **Teilen:** QR-Codes für den Song und die Playlist, die gerade laufen, und für dein Gast-WLAN.
+  Gäste scannen sie mit der Handykamera. Tippe oben auf das QR-Symbol oder im Menü auf Teilen.
 - **Schlaftimer:** Nach 15 bis 120 Minuten stoppt die Musik, in der letzten Minute wird sie leiser.
 - **Ruhebildschirm:** Wird der Bildschirm eine Weile nicht berührt, erscheint das Albumcover groß
   mit der Uhrzeit. Läuft nichts, siehst du eine Uhr mit Wetter und Regenvorhersage.
@@ -65,7 +67,7 @@ auf alten, langsamen Pis.
 | **Pi Zero / Zero W** | 1 Kern, 1 GHz | Zero W: ja | 🟡 gleicher Chip wie der Pi 1, etwas schneller | vermutlich wie beim Pi 1 | etwas besser als der Pi 1 |
 | **Pi 2B** | 4 Kerne, 900 MHz | nein (Kabel oder Stick) | 🟢 | `SPOTISCHERM_ZUINIG=1` empfohlen; `FRAMEBUFFER` nur, wenn der Bildschirm schwarz bleibt | ordentlich |
 | **Pi Zero 2 W** | 4 Kerne, 1 GHz | ja | 🟢 | keine | gut, dazu klein und günstig |
-| **Pi 3B / 3B+ / 3A+** | 4 Kerne, 1,2–1,4 GHz | ja | 🟢 **Empfehlung** für einen 7"-Bildschirm | keine | gut |
+| **Pi 3B / 3B+ / 3A+** | 4 Kerne, 1,2–1,4 GHz | ja | ✅ getestet auf einem 3B+, **Empfehlung** | keine | gut |
 | **Pi 4** | 4 Kerne, 1,5–1,8 GHz | ja | 🟢 | keine | flüssig, auch rund mit 1080×1080 |
 | **Pi 5** | 4 Kerne, 2,4 GHz | ja | 🟢 | keine | flüssig, auch rund mit 1080×1080 |
 | **Windows-PC** (zum Testen) | – | – | ✅ getestet unter Windows 11 | `SPOTISCHERM_WINDOWED=1` oder `SPOTISCHERM_MUIS=1` | flüssig |
@@ -160,7 +162,7 @@ ssh DEINNAME@spotischerm.local
 ```
 
 ```bash
-sudo apt install -y git && git clone https://github.com/DEIN-GITHUB-NAME/spotify-scherm.git ~/spotify-scherm
+sudo apt install -y git && git clone https://github.com/GamenHaaDee/Spotischerm.git ~/spotify-scherm
 ```
 
 ```bash
@@ -299,7 +301,7 @@ heraus. Die Info-Seite liest IP-Adresse, WLAN und Temperatur nur auf dem Pi selb
 - **Alte Pis** (Pi 1, Zero) sind langsam, besonders mit einem großen Bildschirm. Im Framebuffer-Modus
   funktioniert eine Maus, es wird aber kein Mauszeiger gezeichnet.
 - **Noch nicht auf echter Hardware getestet:** der runde Bildschirm, die Hochkant-Montage und die
-  Pis 2B bis 5. Tatsächlich getestet sind nur der Pi 1 Model B und Windows.
+  Pis 2B, 4 und 5. Tatsächlich getestet sind der Pi 1 Model B, der Pi 3B+ und Windows.
 
 ## Wenn etwas nicht funktioniert
 

@@ -33,6 +33,8 @@ op een Raspberry Pi, van de allereerste Pi 1 tot de Pi 5.
 - **Wachtrij:** zien wat er hierna komt.
 - **Songtekst:** tik op de hoes. Teksten komen van [LRCLIB](https://lrclib.net) en lopen meestal
   mee met het nummer.
+- **Delen:** QR-codes van het nummer en de playlist die spelen, en van je gast-wifi. Gasten
+  scannen ze met de camera van hun telefoon. Tik bovenin op het QR-icoon, of op Delen in het menu.
 - **Slaaptimer:** na 15 tot 120 minuten stopt de muziek, en in de laatste minuut wordt hij
   langzaam zachter.
 - **Rustscherm:** raak je het scherm een tijdje niet aan, dan verschijnt de albumhoes groot met
@@ -61,7 +63,7 @@ oude, trage Pi's.
 | **Pi Zero / Zero W** | 1 kern, 1 GHz | Zero W: ja | 🟡 zelfde chip als de Pi 1, iets sneller | waarschijnlijk dezelfde als de Pi 1 | iets beter dan de Pi 1 |
 | **Pi 2B** | 4 kernen, 900 MHz | nee (kabel of dongle) | 🟢 | `SPOTISCHERM_ZUINIG=1` aanbevolen; `FRAMEBUFFER` alleen als het scherm zwart blijft | redelijk |
 | **Pi Zero 2 W** | 4 kernen, 1 GHz | ja | 🟢 | geen | goed, en klein en goedkoop |
-| **Pi 3B / 3B+ / 3A+** | 4 kernen, 1,2–1,4 GHz | ja | 🟢 **aanrader** voor een 7"-scherm | geen | goed |
+| **Pi 3B / 3B+ / 3A+** | 4 kernen, 1,2–1,4 GHz | ja | ✅ getest op een 3B+, **aanrader** | geen | goed |
 | **Pi 4** | 4 kernen, 1,5–1,8 GHz | ja | 🟢 | geen | vloeiend, ook op 1080×1080 rond |
 | **Pi 5** | 4 kernen, 2,4 GHz | ja | 🟢 | geen | vloeiend, ook op 1080×1080 rond |
 | **Windows-pc** (om te testen) | n.v.t. | n.v.t. | ✅ getest op Windows 11 | `SPOTISCHERM_WINDOWED=1` of `SPOTISCHERM_MUIS=1` | vloeiend |
@@ -156,7 +158,7 @@ ssh JOUWNAAM@spotischerm.local
 ```
 
 ```bash
-sudo apt install -y git && git clone https://github.com/JOUW-GITHUB-NAAM/spotify-scherm.git ~/spotify-scherm
+sudo apt install -y git && git clone https://github.com/GamenHaaDee/Spotischerm.git ~/spotify-scherm
 ```
 
 ```bash
@@ -293,8 +295,8 @@ ongeluk op GitHub komen. De info-pagina leest IP-adres, wifi en temperatuur alle
   nachts zie je nog een zwakke gloed.
 - **Oude Pi's** (Pi 1, Zero) zijn traag, zeker op een groot scherm. In de framebuffer-stand zie je
   bij een muis geen cursor.
-- **Nog niet op echte hardware getest:** het ronde scherm, het staand ophangen, en de Pi 2B t/m 5.
-  Alleen de Pi 1 Model B en Windows zijn echt getest.
+- **Nog niet op echte hardware getest:** het ronde scherm, het staand ophangen, en de Pi 2B, 4 en 5.
+  De Pi 1 Model B, de Pi 3B+ en Windows zijn echt getest.
 
 ## Als iets niet werkt
 

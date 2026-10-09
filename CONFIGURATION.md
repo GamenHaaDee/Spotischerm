@@ -23,7 +23,7 @@ take effect immediately.
 
 The names are Dutch because the project started in Dutch: *zuinig* = economy, *scherm* = screen,
 *weer* = weather, *nacht* = night, *rust* = rest/idle, *draaien* = rotate, *kleur* = colour,
-*taal* = language, *lettertype* = font.
+*taal* = language, *lettertype* = font, *gast* = guest, *wachtwoord* = password, *beveiliging* = security.
 
 ---
 
@@ -56,6 +56,9 @@ You can also change these on the screen. See the [mapping table](#instellingenjs
 | `TAAL` | `nl` | `nl`, `en`, `de` | Language of the app |
 | `LETTERTYPE` | `standaard` | `standaard`, `roboto`, `opensans`, `lato`, `comic`, `serif`, `mono` | Font. `install.sh` installs them all on the Pi |
 | `KLEUR` | `groen` | `groen`, `blauw`, `oranje`, `roze`, `paars`, `hoes` | Accent colour for buttons and bars. `hoes` = taken from the album cover of each song |
+| `GAST_WIFI_NAAM` | *(empty)* | network name | Guest Wi-Fi for the Share page: guests scan the QR code and join. Empty = no Wi-Fi QR code |
+| `GAST_WIFI_WACHTWOORD` | *(empty)* | password | Password of that network. **It is shown readable on the screen**, so preferably use a separate guest network. Empty = open network |
+| `GAST_WIFI_BEVEILIGING` | `WPA` | `WPA`, `WEP`, `geen` | Security type. `WPA` also covers WPA2 and WPA3 |
 | `DRAAIEN` | `0` | `0`, `90`, `270`, `180` | Rotate the picture (and touch) clockwise: 0 = landscape, 90/270 = portrait, 180 = upside down |
 
 ### Hardware and screen

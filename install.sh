@@ -18,7 +18,7 @@ sudo apt-get install -y python3-pygame python3-requests python3-venv python3-zer
 sudo apt-get install -y libegl1 libegl-mesa0 libgles2 libgbm1 libgl1-mesa-dri
 
 python3 -m venv --system-site-packages .venv
-.venv/bin/pip install --upgrade spotipy
+.venv/bin/pip install --upgrade spotipy segno
 
 # Toegang tot scherm en touchscreen zonder desktop
 sudo usermod -aG video,input,render "$USER"

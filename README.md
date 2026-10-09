@@ -35,6 +35,8 @@ Raspberry Pi, from the very first Pi 1 up to the Pi 5.
 - **Queue:** see what's up next.
 - **Lyrics:** tap the album cover. Lyrics come from [LRCLIB](https://lrclib.net) and are usually
   synced to the song.
+- **Share:** QR codes for the song and playlist that are playing, and for your guest Wi-Fi.
+  Guests scan them with their phone camera. Tap the QR icon at the top, or Share in the menu.
 - **Sleep timer:** the music stops after 15 to 120 minutes, and fades out during the last minute.
 - **Idle screen:** when nobody touches the screen for a while, the album cover is shown large with
   the time. When nothing is playing, you get a clock with the weather and a rain forecast.
@@ -63,7 +65,7 @@ slow Pis.
 | **Pi Zero / Zero W** | 1 core, 1 GHz | Zero W: yes | 🟡 same chip as the Pi 1, a bit faster | probably the same as the Pi 1 | a bit better than the Pi 1 |
 | **Pi 2B** | 4 cores, 900 MHz | no (cable or dongle) | 🟢 | `SPOTISCHERM_ZUINIG=1` recommended; `FRAMEBUFFER` only if the screen stays black | fair |
 | **Pi Zero 2 W** | 4 cores, 1 GHz | yes | 🟢 | none | good, and small and cheap |
-| **Pi 3B / 3B+ / 3A+** | 4 cores, 1.2–1.4 GHz | yes | 🟢 **recommended** for a 7" screen | none | good |
+| **Pi 3B / 3B+ / 3A+** | 4 cores, 1.2–1.4 GHz | yes | ✅ tested on a 3B+, **recommended** | none | good |
 | **Pi 4** | 4 cores, 1.5–1.8 GHz | yes | 🟢 | none | smooth, also on a 1080×1080 round screen |
 | **Pi 5** | 4 cores, 2.4 GHz | yes | 🟢 | none | smooth, also on a 1080×1080 round screen |
 | **Windows PC** (for testing) | n/a | n/a | ✅ tested on Windows 11 | `SPOTISCHERM_WINDOWED=1` or `SPOTISCHERM_MUIS=1` | smooth |
@@ -157,7 +159,7 @@ ssh YOURNAME@spotischerm.local
 ```
 
 ```bash
-sudo apt install -y git && git clone https://github.com/YOUR-GITHUB-NAME/spotify-scherm.git ~/spotify-scherm
+sudo apt install -y git && git clone https://github.com/GamenHaaDee/Spotischerm.git ~/spotify-scherm
 ```
 
 ```bash
@@ -291,8 +293,8 @@ The info page reads the IP address, Wi-Fi and temperature on the Pi itself only.
   faint glow.
 - **Old Pis** (Pi 1, Zero) are slow, especially on a big screen. In framebuffer mode a mouse works,
   but no cursor is drawn.
-- **Not yet tested on real hardware:** the round screen, portrait mounting, and the Pi 2B to 5.
-  Only the Pi 1 Model B and Windows have actually been tested.
+- **Not yet tested on real hardware:** the round screen, portrait mounting, and the Pi 2B, 4
+  and 5. The Pi 1 Model B, the Pi 3B+ and Windows have actually been tested.
 
 ## When something doesn't work
 

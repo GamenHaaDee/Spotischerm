@@ -113,7 +113,7 @@ class InputReader(threading.Thread):
         super().__init__(daemon=True)
         self.w, self.h = width, height
         self.x, self.y = width // 2, height // 2
-        self._state = {}
+        self.devstate = {}
 
     def run(self):
         devices = {}
@@ -128,7 +128,7 @@ class InputReader(threading.Thread):
                         except OSError:
                             continue
                         devices[fd] = path
-                        self._state[fd] = self._new_state(fd)
+                        self.devstate[fd] = self._new_state(fd)
             if not devices:
                 time.sleep(1)
                 continue
@@ -141,7 +141,10 @@ class InputReader(threading.Thread):
                     devices.pop(fd, None)
                     continue
                 for i in range(0, len(data) - EVENT.size + 1, EVENT.size):
-                    self._handle(fd, *EVENT.unpack_from(data, i)[2:])
+                    try:
+                        self.on_event(fd, *EVENT.unpack_from(data, i)[2:])
+                    except Exception as err:  # één vreemd event mag het lezen niet stilleggen
+                        print(f"Invoer: {err}", flush=True)
 
     def _new_state(self, fd):
         ranges = {}
@@ -152,8 +155,9 @@ class InputReader(threading.Thread):
                 pass
         return {"ranges": ranges, "down": False, "press": None, "moved": False}
 
-    def _handle(self, fd, etype, code, value):
-        st = self._state[fd]
+    # Let op: geen namen als _handle of _state; die gebruikt threading.Thread zelf (Python 3.13+).
+    def on_event(self, fd, etype, code, value):
+        st = self.devstate[fd]
         if etype == EV_ABS and code in st["ranges"]:
             lo, hi = st["ranges"][code]
             if code in (ABS_X, ABS_MT_X):

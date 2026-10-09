@@ -119,7 +119,7 @@ before testing: `sudo systemctl stop spotischerm`.
 4 seconds each:
 
 ```bash
-cd ~/spotify-scherm && SDL_VIDEODRIVER=kmsdrm .venv/bin/python -c "import pygame,time; pygame.display.init(); s=pygame.display.set_mode((0,0),pygame.FULLSCREEN); print(s.get_size(), pygame.display.get_driver()); [(s.fill(c), pygame.display.flip(), time.sleep(4)) for c in ((255,0,0),(0,255,0),(0,0,255))]"
+cd ~/spotify-scherm && SDL_VIDEODRIVER=kmsdrm SDL_RENDER_DRIVER=opengles2 .venv/bin/python -c "import pygame,time; pygame.display.init(); s=pygame.display.set_mode((0,0),pygame.FULLSCREEN); print(s.get_size(), pygame.display.get_driver()); [(s.fill(c), pygame.display.flip(), time.sleep(4)) for c in ((255,0,0),(0,255,0),(0,0,255))]"
 ```
 
 **Test B: does writing straight to the console framebuffer show up?** This turns the screen
@@ -142,7 +142,8 @@ EOF
 | You see… | Cause | Go to |
 |---|---|---|
 | Nothing at all, not even the boot messages or login prompt | Resolution too high for the HDMI output | [Cause 1](#cause-1-the-resolution-is-too-high) |
-| The console, but test A stays black and test B turns red | SDL/KMS doesn't reach the screen | [Cause 2](#cause-2-sdlkms-draws-but-nothing-reaches-the-screen) |
+| Test A shows colours, but the app stays black (older version) | SDL picks desktop OpenGL | [Cause 2](#cause-2-sdl-picks-desktop-opengl-instead-of-opengl-es) |
+| The console, but test A stays black and test B turns red | SDL/KMS doesn't reach the screen | [Cause 3](#cause-3-sdlkms-draws-but-nothing-reaches-the-screen) |
 | Test A shows colours, but the app doesn't | Something in the app or its settings | Check the log; try `DRAAIEN=0` and `SCHERM_VORM=auto` |
 
 ### Cause 1: the resolution is too high
@@ -172,10 +173,31 @@ If you lose the picture completely, put the SD card in a PC and remove the `vide
 again (or copy `cmdline.txt.bak` back). A lower resolution also makes the app much faster on
 old Pis, see [Low frame rate](#low-frame-rate).
 
-### Cause 2: SDL/KMS draws, but nothing reaches the screen
+### Cause 2: SDL picks desktop OpenGL instead of OpenGL ES
 
-Also seen on the **Pi 1**: even with a working mode, the picture SDL makes through KMS and the
-GPU stayed black, while test B (writing to `/dev/fb0` directly) worked.
+Found on a **Pi 3B+**, and very likely the reason the Pi 1 stayed black too. Without a desktop,
+SDL tries desktop OpenGL first. The Pi only has OpenGL ES, so SDL ends up with a renderer that
+draws nothing, without any error. You can see it with SDL's logging:
+
+```bash
+SDL_LOGGING="*=debug" SDL_VIDEODRIVER=kmsdrm .venv/bin/python -c "import pygame; pygame.display.init(); pygame.display.set_mode((0,0),pygame.FULLSCREEN)" 2>&1 | grep -iE "libGL|renderer"
+```
+
+If it says `Failed loading libGL.so.1` and `Created renderer: opengl`, this is it.
+
+**Fix:** the current version of the app tells SDL to use OpenGL ES (`SDL_RENDER_DRIVER=opengles2`)
+by itself. Update the app (see the README). On an older version you can add this line to
+`config.env` instead:
+
+```
+SDL_RENDER_DRIVER=opengles2
+```
+
+### Cause 3: SDL/KMS draws, but nothing reaches the screen
+
+Seen on the **Pi 1** before Cause 2 was known: even with a working mode, the picture SDL makes
+through KMS and the GPU stayed black, while test B (writing to `/dev/fb0` directly) worked. Try
+Cause 2 first; if that doesn't help, the framebuffer backend always works.
 
 **Fix:** use the **framebuffer backend**. The app then draws on an ordinary canvas, copies it
 straight into `/dev/fb0` and reads touch and mouse from `/dev/input` itself. SDL is only used
@@ -289,6 +311,10 @@ For comparison, the same app on a desktop PC takes 0.3–2 ms per frame. A Pi 3B
 sudo apt install -y evtest && sudo evtest
 ```
 
+Without a desktop, SDL reports a touchscreen as *finger* events, not as mouse clicks. Older
+versions of the app only listened to mouse clicks, so the picture worked but touch didn't.
+Update the app to fix this.
+
 **In framebuffer mode** the app reads `/dev/input/event*` itself. It picks devices that report
 absolute X/Y (touchscreens) or relative X/Y (mice), and checks for new devices every 5 seconds.
 The user running the service must be in the `input` group:
@@ -299,6 +325,25 @@ sudo usermod -aG input,video "$USER"   # then log out/in or reboot
 ```
 
 A mouse works in framebuffer mode, but no cursor is drawn.
+
+If touch does nothing in framebuffer mode and the log shows
+`TypeError: '_thread._ThreadHandle' object is not callable`, you have an older version of
+`app/fbdev.py` that clashes with Python 3.13. Update the app.
+
+---
+
+## The SD card got corrupted, or the Pi is slow for no reason
+
+Almost always **too little power**. Check it:
+
+```bash
+vcgencmd get_throttled
+```
+
+`throttled=0x0` is good. Anything else means the voltage dropped: `0x50005`, for example, means
+"under-voltage right now, and it has been throttled". A Pi 3B+ needs a 5.1 V / 2.5 A supply
+with a short, thick cable; a phone charger often isn't enough, especially if the screen also
+draws its power from the Pi. Shut down with `sudo poweroff` before pulling the plug.
 
 ---
 
@@ -420,5 +465,6 @@ ssh user@spotischerm.local "sudo systemctl restart spotischerm"
 |---|---|---|
 | PC (Windows 11) | window / full screen | `SPOTISCHERM_WINDOWED=1` or `SPOTISCHERM_MUIS=1` |
 | Pi 1 Model B, Raspberry Pi OS Lite 32-bit (Trixie) | 1920×1200 HDMI monitor | `video=HDMI-A-1:1440x900@60`, `SPOTISCHERM_FRAMEBUFFER=1`, `SPOTISCHERM_ZUINIG=1` |
+| Pi 3B+, Raspberry Pi OS Lite 32-bit (Trixie) | 5" 1024×600 HDMI touchscreen (QDtech MPI5001) | none |
 
 If you get it running on other hardware, a note about what you needed is very welcome.

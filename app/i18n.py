@@ -194,6 +194,17 @@ TEXTS = {
         "Songtekst": "Lyrics", "Songtekst laden…": "Loading lyrics…", "Instrumentaal": "Instrumental",
         "Geen songtekst gevonden": "No lyrics found",
         "Zuinige stand": "Economy mode", "aan": "on", "uit": "off",
+        # delen
+        "Delen": "Share", "Dit nummer": "This song", "Deze aflevering": "This episode",
+        "Deze playlist": "This playlist", "Dit album": "This album", "Deze artiest": "This artist",
+        "Deze podcast": "This podcast", "Deze lijst": "This list", "Wifi": "Wi-Fi",
+        "Wachtwoord: {password}": "Password: {password}", "Geen wachtwoord": "No password",
+        "QR-codes maken lukt nog niet. Voer op de Pi opnieuw bash install.sh uit en herstart de app.":
+            "Can't make QR codes yet. Run bash install.sh again on the Pi and restart the app.",
+        "Er speelt niks om te delen. Zet GAST_WIFI_NAAM in config.env voor een QR-code van je gast-wifi.":
+            "Nothing is playing to share. Set GAST_WIFI_NAAM in config.env for a QR code of your guest Wi-Fi.",
+        "Tip: zet GAST_WIFI_NAAM in config.env voor een QR-code van je gast-wifi.":
+            "Tip: set GAST_WIFI_NAAM in config.env for a QR code of your guest Wi-Fi.",
         # weer
         "Helder": "Clear", "Overwegend helder": "Mostly clear", "Half bewolkt": "Partly cloudy",
         "Bewolkt": "Cloudy", "Mist": "Fog", "Motregen": "Drizzle", "Regen": "Rain",
@@ -349,6 +360,16 @@ TEXTS = {
         "Songtekst": "Songtext", "Songtekst laden…": "Songtext wird geladen…", "Instrumentaal": "Instrumental",
         "Geen songtekst gevonden": "Kein Songtext gefunden",
         "Zuinige stand": "Sparmodus", "aan": "an", "uit": "aus",
+        "Delen": "Teilen", "Dit nummer": "Dieser Song", "Deze aflevering": "Diese Folge",
+        "Deze playlist": "Diese Playlist", "Dit album": "Dieses Album", "Deze artiest": "Dieser Künstler",
+        "Deze podcast": "Dieser Podcast", "Deze lijst": "Diese Liste", "Wifi": "WLAN",
+        "Wachtwoord: {password}": "Passwort: {password}", "Geen wachtwoord": "Kein Passwort",
+        "QR-codes maken lukt nog niet. Voer op de Pi opnieuw bash install.sh uit en herstart de app.":
+            "QR-Codes gehen noch nicht. Führe auf dem Pi erneut bash install.sh aus und starte die App neu.",
+        "Er speelt niks om te delen. Zet GAST_WIFI_NAAM in config.env voor een QR-code van je gast-wifi.":
+            "Es läuft nichts zum Teilen. Trage GAST_WIFI_NAAM in config.env ein für einen QR-Code deines Gast-WLANs.",
+        "Tip: zet GAST_WIFI_NAAM in config.env voor een QR-code van je gast-wifi.":
+            "Tipp: Trage GAST_WIFI_NAAM in config.env ein für einen QR-Code deines Gast-WLANs.",
         "Helder": "Klar", "Overwegend helder": "Überwiegend klar", "Half bewolkt": "Teilweise bewölkt",
         "Bewolkt": "Bewölkt", "Mist": "Nebel", "Motregen": "Nieselregen", "Regen": "Regen",
         "IJzel": "Glatteis", "Sneeuw": "Schnee", "Regenbuien": "Regenschauer",

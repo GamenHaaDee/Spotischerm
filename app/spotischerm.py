@@ -17,6 +17,7 @@ from discovery import LocalDevices, norm
 import fonts
 from i18n import LANGUAGES, month, set_language, tr, weekday
 from lyrics import LyricsCache
+from share import QrCache, spotify_link, wifi_payload
 from weather import Weather
 
 BG = (18, 18, 18)
@@ -266,6 +267,7 @@ class Player:
         self.queue_items = None
         self.search_results = None
         self.recent = None
+        self.context_names = {}  # uri -> {naam, info}; {} als Spotify hem niet geeft
         self.last_ok = None
         self._search_for = None
         self.art_url = None
@@ -499,6 +501,13 @@ class Player:
             pass
         return None  # bijv. Gelikete nummers: die kan de API niet als geheel afspelen
 
+    def context_name(self, uri):
+        """Naam van de playlist of het album dat speelt (voor Delen); None zolang hij laadt."""
+        if uri not in self.context_names:
+            self.context_names[uri] = None
+            self._run(lambda: self.context_names.__setitem__(uri, self._context_info(uri) or {}))
+        return self.context_names[uri]
+
     def load_playlists(self, keep=False):
         if not keep:
             self.playlists = None
@@ -643,6 +652,11 @@ class Screen:
         self.wrap_cache = {}
         self.fps, self.frame_ms = 0.0, 0.0
         self.show_fps = os.environ.get("SPOTISCHERM_TOON_FPS") == "1"
+        self.qr = QrCache()
+        self.share_tab = 0
+        wifi_name = os.environ.get("GAST_WIFI_NAAM", "").strip()
+        self.wifi = (wifi_name, os.environ.get("GAST_WIFI_WACHTWOORD", "").strip(),
+                     os.environ.get("GAST_WIFI_BEVEILIGING", "WPA").strip()) if wifi_name else None
         self.apply_settings()
 
     def configure(self):
@@ -837,7 +851,7 @@ class Screen:
         c, r = self.pt(x, y), self.px(radius)
         if filled:
             pygame.draw.circle(self.s, ACCENT, c, r)
-        elif icon in ("prev", "next", "search", "gear"):
+        elif icon in ("prev", "next", "search", "gear", "qr"):
             pygame.draw.circle(self.s, PANEL, c, r)
         color = BG if filled else ACCENT if lit else TEXT
         self.icon(icon, c, r, color)
@@ -872,6 +886,16 @@ class Screen:
                 inner, outer = r * 0.36, r * 0.52
                 pygame.draw.line(self.s, color, (x + math.cos(a) * inner, y + math.sin(a) * inner),
                                  (x + math.cos(a) * outer, y + math.sin(a) * outer), lw + 2)
+        elif kind == "qr":
+            # Drie hoekjes zoals op een QR-code, en een blokje rechtsonder.
+            s, gap = r * 0.3, r * 0.08
+            for dx, dy in ((-1, -1), (1, -1), (-1, 1)):
+                box = pygame.Rect(0, 0, s, s)
+                box.center = (x + dx * (s / 2 + gap), y + dy * (s / 2 + gap))
+                pygame.draw.rect(self.s, color, box, max(2, lw - 1))
+            dot = pygame.Rect(0, 0, s * 0.45, s * 0.45)
+            dot.center = (x + s / 2 + gap, y + s / 2 + gap)
+            pygame.draw.rect(self.s, color, dot)
         elif kind == "shuffle":
             a, b = r * 0.55, r * 0.38
             pygame.draw.line(self.s, color, (x - a, y + b), (x + a * 0.7, y - b), lw)
@@ -1068,7 +1092,7 @@ class Screen:
                      "set_nacht": self.draw_set_nacht, "set_font": self.draw_set_font,
                      "set_taal": self.draw_set_taal, "set_kleur": self.draw_set_kleur,
                      "set_scherm": self.draw_set_scherm, "info": self.draw_info,
-                     "lyrics": self.draw_lyrics}
+                     "lyrics": self.draw_lyrics, "share": self.draw_share}
             now_view = {"rond": self.draw_now_round, "staand": self.draw_now_portrait}.get(self.shape, self.draw_now)
             views.get(self.view, now_view)()
             self.draw_toast()
@@ -1224,10 +1248,11 @@ class Screen:
                  (tr("Timer {minutes}m", minutes=math.ceil(left / 60)) if left else tr("Slaaptimer"),
                   self.open_timer),
                  (tr("Zoeken"), self.open_search), (tr("Instellingen"), self.open_settings),
-                 (tr("Recent"), self.open_recent), (tr("Songtekst"), self.open_lyrics)]
+                 (tr("Recent"), self.open_recent), (tr("Songtekst"), self.open_lyrics),
+                 (tr("Delen"), self.open_share)]
         for i, (label, action) in enumerate(items):
             alone = i == len(items) - 1 and len(items) % 2  # laatste knop alleen op zijn rij: midden
-            r = self.rect(167 if alone else 90 + (i % 2) * 154, 110 + (i // 2) * 62, 146, 54)
+            r = self.rect(167 if alone else 90 + (i % 2) * 154, 104 + (i // 2) * 59, 146, 52)
             self.pill(r, label, action, size=18, active=i == 3 and bool(left))
         self.pill(self.rect(*self.L["back_single"]), tr("‹ Terug"), self.back, size=self.L["pill_size"])
 
@@ -1239,9 +1264,10 @@ class Screen:
         title, subtitle, album = describe(item)
 
         name = device.get("name")
-        self.pill(self.rect(16, 12, 220, 40), tr("Op: {name}", name=name) if name else tr("Kies apparaat"), self.open_devices)
-        self.round_button(272, 32, 20, "search", self.open_search)
-        self.round_button(334, 32, 20, "gear", self.open_settings)
+        self.pill(self.rect(16, 12, 196, 40), tr("Op: {name}", name=name) if name else tr("Kies apparaat"), self.open_devices)
+        self.round_button(238, 32, 20, "search", self.open_search)
+        self.round_button(292, 32, 20, "qr", self.open_share)
+        self.round_button(346, 32, 20, "gear", self.open_settings)
         left = self.p.sleep_left()
         self.pill(self.rect(386, 12, 126, 40), tr("Timer {minutes}m", minutes=math.ceil(left / 60)) if left else tr("Timer"),
                   self.open_timer, active=bool(left))
@@ -1837,6 +1863,74 @@ class Screen:
                 self.text(line, small, fade(i - j), (area.centerx, above + n * other_h), anchor="midtop")
             above -= gap
 
+    def share_items(self):
+        """Wat je kunt delen: (kop, regels eronder, tekst in de QR-code)."""
+        pb, _ = self.p.snapshot()
+        item = (pb or {}).get("item")
+        items = []
+        if item and spotify_link(item.get("uri")):
+            title, subtitle, _ = describe(item)
+            kop = tr("Deze aflevering") if item.get("type") == "episode" else tr("Dit nummer")
+            items.append((kop, [title, subtitle], spotify_link(item["uri"])))
+        uri = ((pb or {}).get("context") or {}).get("uri")
+        if item and spotify_link(uri):
+            kind = uri.split(":")[1]
+            kop = {"playlist": tr("Deze playlist"), "album": tr("Dit album"),
+                   "artist": tr("Deze artiest"), "show": tr("Deze podcast")}.get(kind, tr("Deze lijst"))
+            info = self.p.context_name(uri)
+            name = info.get("name", "") if info is not None else "…"
+            items.append((kop, [name], spotify_link(uri)))
+        if self.wifi:
+            name, password, security = self.wifi
+            lines = [name, tr("Wachtwoord: {password}", password=password) if password else tr("Geen wachtwoord")]
+            items.append((tr("Wifi"), lines, wifi_payload(name, password, security)))
+        return items
+
+    def draw_share(self):
+        L = self.L
+        self.pill(self.rect(*L["back_single"]), tr("‹ Terug"), self.back, size=L["pill_size"])
+        self.text(tr("Delen"), 24, TEXT, self.pt(*L["title"]), anchor="center", bold=True)
+        max_w = self.px(320 if self.round else 440 if self.compact else 600)
+        if not self.qr.available:
+            self.paragraph(tr("QR-codes maken lukt nog niet. Voer op de Pi opnieuw bash install.sh uit "
+                              "en herstart de app."), 20, MUTED, self.pt(self.cx, 240), max_w)
+            return
+        items = self.share_items()
+        if not items:
+            self.paragraph(tr("Er speelt niks om te delen. Zet GAST_WIFI_NAAM in config.env "
+                              "voor een QR-code van je gast-wifi."), 20, MUTED, self.pt(self.cx, 240), max_w)
+            return
+        self.share_tab = min(self.share_tab, len(items) - 1)
+        if self.compact:
+            # (QR-maat, bovenkant, tekst, tabbladen y, breedte, hoogte, tekstbreedte)
+            size, top, text_y, tabs_y, tab_w, tab_h, text_w = {
+                "rond": (170, 84, 270, 342, 100, 40, 280),
+                "staand": (380, -40, 370, 470, 140, 56, 440)}[self.shape]
+            kop, lines, data = items[self.share_tab]
+            self.share_card(kop, lines, data, self.cx, top, size, text_y, text_w)
+            if len(items) > 1:
+                gap = 8
+                x0 = self.cx - (len(items) * tab_w + (len(items) - 1) * gap) // 2
+                for i, (kop, _, _) in enumerate(items):
+                    self.pill(self.rect(x0 + i * (tab_w + gap), tabs_y, tab_w, tab_h), kop,
+                              lambda i=i: setattr(self, "share_tab", i), active=i == self.share_tab, size=16)
+            return
+        size = {1: 300, 2: 280}.get(len(items), 220)
+        slot = 768 / len(items)
+        for i, (kop, lines, data) in enumerate(items):
+            self.share_card(kop, lines, data, int(16 + slot * (i + 0.5)), 72, size, 72 + size + 24, int(slot) - 24)
+        if not self.wifi:
+            self.text(tr("Tip: zet GAST_WIFI_NAAM in config.env voor een QR-code van je gast-wifi."), 14,
+                      CLOCK_DIM, self.pt(400, 474), anchor="midbottom", max_w=self.px(760))
+
+    def share_card(self, kop, lines, data, cx, top, size, text_y, max_w):
+        """Een QR-code met eronder wat het is."""
+        code = self.qr.get(data, self.px(size))
+        self.s.blit(code, code.get_rect(midtop=self.pt(cx, top)))
+        self.text(kop, 20, TEXT, self.pt(cx, text_y), anchor="center", bold=True, max_w=self.px(max_w))
+        for n, line in enumerate(x for x in lines if x):
+            self.text(line, 16, MUTED, self.pt(cx, text_y + 26 + n * 22), anchor="center", max_w=self.px(max_w))
+
     def draw_toast(self):
         with self.p.lock:
             msg, until = self.p.message, self.p.message_until
@@ -1897,6 +1991,9 @@ class Screen:
 
     def open_lyrics(self):
         self.view, self.scroll = "lyrics", 0
+
+    def open_share(self):
+        self.view, self.share_tab = "share", 0
 
     # toetsenbord
 
@@ -2027,7 +2124,7 @@ class Screen:
             return
         if not self.press or self.view in ("now", "menu", "timer", "keyboard",
                                               "set_weer", "set_rust", "set_nacht", "set_font", "set_taal",
-                                              "set_kleur", "set_scherm", "info"):
+                                              "set_kleur", "set_scherm", "info", "share"):
             return
         dy = pos[1] - self.press[0][1]
         if abs(dy) > self.px(12):
@@ -2064,6 +2161,10 @@ def open_display(shape):
         canvas = pygame.Surface((fb.w, fb.h), 0, fb.bpp, fb.masks)
         InputReader(fb.w, fb.h).start()
         return canvas, fb
+    if os.environ.get("SDL_VIDEODRIVER") == "kmsdrm":
+        # Zonder dit kiest SDL desktop-OpenGL, die de Pi niet heeft: dan blijft het scherm
+        # zwart zonder foutmelding. De Pi kan alleen OpenGL ES.
+        os.environ.setdefault("SDL_RENDER_DRIVER", "opengles2")
     pygame.display.init()
     pygame.font.init()
     if os.environ.get("SPOTISCHERM_WINDOWED") == "1":
@@ -2139,6 +2240,7 @@ def main():
     ui.p = Player(small_art=economy)
     touch_fps, calm_fps = ECONOMY_FPS if economy else (FPS, CALM_FPS)
     clock = pygame.time.Clock()
+    finger = None
     while True:
         for ev in pygame.event.get():
             if ev.type == pygame.QUIT:
@@ -2157,7 +2259,24 @@ def main():
                 continue
             if ev.type == pygame.KEYDOWN and ev.key == pygame.K_ESCAPE:
                 return
-            if ev.type == pygame.MOUSEBUTTONDOWN and ev.button == 1:
+            # Zonder desktop geeft SDL een touchscreen door als vinger (0..1); met desktop
+            # komt er ook een nagebootste muisklik bij (touch=True), die slaan we dan over.
+            if ev.type in (pygame.FINGERDOWN, pygame.FINGERMOTION, pygame.FINGERUP):
+                if finger not in (None, ev.finger_id):
+                    continue  # alleen de eerste vinger telt
+                dw, dh = surface.get_size()
+                pos = ui.map_touch((int(ev.x * (dw - 1)), int(ev.y * (dh - 1))))
+                if ev.type == pygame.FINGERDOWN:
+                    finger = ev.finger_id
+                    ui.on_down(pos)
+                elif ev.type == pygame.FINGERMOTION:
+                    ui.on_move(pos)
+                else:
+                    finger = None
+                    ui.on_up(pos)
+            elif getattr(ev, "touch", False):
+                continue
+            elif ev.type == pygame.MOUSEBUTTONDOWN and ev.button == 1:
                 ui.on_down(ui.map_touch(ev.pos))
             elif ev.type == pygame.MOUSEMOTION and ev.buttons[0]:
                 ui.on_move(ui.map_touch(ev.pos))
