@@ -3,6 +3,8 @@ import math
 import os
 import queue
 import socket
+import subprocess
+import sys
 import threading
 import time
 from datetime import datetime, timedelta, timezone
@@ -19,6 +21,7 @@ from i18n import LANGUAGES, month, set_language, tr, weekday
 from lyrics import LyricsCache
 from share import QrCache, spotify_link, wifi_payload
 from weather import Weather
+from web import SettingsServer
 
 BG = (18, 18, 18)
 PANEL = (42, 42, 42)
@@ -29,7 +32,7 @@ MUTED = (160, 160, 160)
 CLOCK = (130, 130, 130)
 CLOCK_DIM = (95, 95, 95)
 ACCENT = (30, 215, 96)     # wordt per beeld gezet uit de instelling "kleur"
-APP_VERSION = "1.0"
+APP_VERSION = "1.1"
 TOAST = (80, 80, 80)
 
 BASE_W, BASE_H = 800, 480   # rechthoekig ontwerp
@@ -62,6 +65,8 @@ DEVICES_REFRESH = 5        # apparatenlijst: elke zoveel seconden verversen
 IDLE_OPTIONS = (1, 2, 5, 10, 15, 30, 60, 0)   # minuten tot de klok; 0 = nooit
 NIGHT_STEP = 30            # nachttijden verschuiven per zoveel minuten
 INFO_REFRESH = 5           # info-pagina: zo vaak (seconden) IP, wifi en temperatuur opnieuw lezen
+SCROLLBAR_GUTTER = 30      # breedte van de strook rechts naast lange lijsten, voor de scrollbalk
+SWIPE_MIN = 90             # zo ver (ontwerp-pixels) moet je opzij vegen voor een veeggebaar
 
 ACCENTS = (("groen", "Groen", (30, 215, 96)), ("blauw", "Blauw", (64, 156, 255)),
            ("oranje", "Oranje", (255, 145, 48)), ("roze", "Roze", (255, 100, 170)),
@@ -654,6 +659,8 @@ class Screen:
         self.show_fps = os.environ.get("SPOTISCHERM_TOON_FPS") == "1"
         self.qr = QrCache()
         self.share_tab = 0
+        self.web_port = None     # poort van de webpagina voor instellingen, None = uit
+        self.power_confirm = None  # "reboot" of "poweroff" terwijl we om bevestiging vragen
         wifi_name = os.environ.get("GAST_WIFI_NAAM", "").strip()
         self.wifi = (wifi_name, os.environ.get("GAST_WIFI_WACHTWOORD", "").strip(),
                      os.environ.get("GAST_WIFI_BEVEILIGING", "WPA").strip()) if wifi_name else None
@@ -846,6 +853,8 @@ class Screen:
             size -= 1
         self.text(label, size, BG if active else fg, r.center, anchor="center", max_w=room, family=family)
         self.buttons.append((r, action))
+        if label == tr("‹ Terug"):
+            self.back_action = action
 
     def round_button(self, x, y, radius, icon, action, filled=False, lit=False):
         c, r = self.pt(x, y), self.px(radius)
@@ -1059,6 +1068,7 @@ class Screen:
     def draw(self):
         global ACCENT
         self.buttons, self.sliders = [], []
+        self.back_action = None  # wat de knop '‹ Terug' op dit scherm doet (voor vegen)
         self.animating = False
         self.update_art()
         choice = self.settings["kleur"]
@@ -1091,7 +1101,7 @@ class Screen:
                      "set_weer": self.draw_set_weer, "set_rust": self.draw_set_rust,
                      "set_nacht": self.draw_set_nacht, "set_font": self.draw_set_font,
                      "set_taal": self.draw_set_taal, "set_kleur": self.draw_set_kleur,
-                     "set_scherm": self.draw_set_scherm, "info": self.draw_info,
+                     "set_scherm": self.draw_set_scherm, "info": self.draw_info, "set_power": self.draw_set_power, "set_web": self.draw_set_web,
                      "lyrics": self.draw_lyrics, "share": self.draw_share}
             now_view = {"rond": self.draw_now_round, "staand": self.draw_now_portrait}.get(self.shape, self.draw_now)
             views.get(self.view, now_view)()
@@ -1336,7 +1346,13 @@ class Screen:
 
         row_h = self.px(L["row_h"])
         extra_w = self.px(L["extra_w"])
-        self.scroll = max(0, min(self.scroll, len(rows) * row_h - area.h))
+        total = len(rows) * row_h
+        long_list = total > area.h
+        dragged = self.drag_value("scrollbar")
+        if dragged is not None:
+            self.scroll = dragged * (total - area.h)
+        self.scroll = max(0, min(self.scroll, total - area.h))
+        row_w = area.w - (self.px(SCROLLBAR_GUTTER) if long_list else 0)
         self.s.set_clip(area)
         for i, row in enumerate(rows):
             label, sub, active, action = row[:4]
@@ -1345,7 +1361,7 @@ class Screen:
             top = area.y + i * row_h - self.scroll
             if top + row_h < area.y or top > area.bottom:
                 continue
-            r = pygame.Rect(area.x, top, area.w, row_h - self.px(8))
+            r = pygame.Rect(area.x, top, row_w, row_h - self.px(8))
             pygame.draw.rect(self.s, PANEL_ACTIVE if active else PANEL, r, border_radius=self.px(12))
             if active:
                 pygame.draw.rect(self.s, ACCENT, (r.x, r.y + self.px(12), self.px(5), r.h - self.px(24)))
@@ -1363,6 +1379,34 @@ class Screen:
                           bg=BUTTON)
                 self.buttons[-1] = (er.clip(area), extra)
         self.s.set_clip(None)
+        if long_list:
+            self.scrollbar(area, total, rows)
+
+    def scrollbar(self, area, total, rows):
+        """Balk rechts naast een lange lijst: sleep de greep of tik op de balk om snel te scrollen."""
+        gutter = self.px(SCROLLBAR_GUTTER)
+        track = pygame.Rect(area.right - gutter // 2 - self.px(3), area.y + self.px(4), self.px(6),
+                            area.h - self.px(8))
+        thumb_h = max(self.px(44), track.h * area.h // total)
+        room = track.h - thumb_h
+        frac = self.scroll / (total - area.h)
+        grabbed = self.drag_value("scrollbar") is not None
+        pygame.draw.rect(self.s, PANEL, track, border_radius=track.w // 2)
+        thumb = pygame.Rect(0, 0, self.px(12 if grabbed else 8), thumb_h)
+        thumb.midtop = (track.centerx, track.y + int(room * frac))
+        pygame.draw.rect(self.s, ACCENT if grabbed else MUTED, thumb, border_radius=thumb.w // 2)
+        if grabbed:
+            # Laat zien waar je bent: de naam van de rij die bovenaan komt te staan.
+            i = min(len(rows) - 1, int(self.scroll / self.px(self.L["row_h"]) + 0.5))
+            bubble = pygame.Rect(0, 0, min(self.px(260), area.w - 2 * gutter), self.px(44))
+            bubble.midright = (track.x - self.px(14), thumb.centery)
+            bubble.clamp_ip(area)
+            pygame.draw.rect(self.s, ACCENT, bubble, border_radius=bubble.h // 2)
+            self.text(rows[i][0], 20, BG, bubble.center, anchor="center", max_w=bubble.w - self.px(24), bold=True)
+        # Ruim aanraakgebied: de hele strook rechts, tot aan de rand van het scherm.
+        hit = pygame.Rect(area.right - gutter, area.y, gutter + self.px(16), area.h)
+        to_frac = lambda pos: max(0.0, min(1.0, (pos[1] - track.y - thumb_h / 2) / max(1, room)))
+        self.sliders.append(("scrollbar", hit.collidepoint, to_frac, lambda f: None, None))
 
     def draw_devices(self):
         # Zolang de lijst openstaat regelmatig verversen: kies je een speaker op je
@@ -1544,7 +1588,9 @@ class Screen:
                  lambda: self.open_setting("set_kleur")),
                 (tr("Taal"), LANGUAGES[s["taal"]], False, lambda: self.open_setting("set_taal")),
                 (tr("Scherm"), tr(dict(ROTATIONS)[s["draaien"]]), False, lambda: self.open_setting("set_scherm")),
-                (tr("Info"), self.system_info()[0][1], False, lambda: self.open_setting("info"))]
+                (tr("Info"), self.system_info()[0][1], False, lambda: self.open_setting("info")),
+                (tr("Via je telefoon"), self.web_url() or tr("Uit"), False, lambda: self.open_setting("set_web")),
+                (tr("Aan/uit"), tr("Herstarten of uitzetten"), False, lambda: self.open_setting("set_power"))]
         self.draw_list(tr("Instellingen"), rows, "")
 
     def setting_page(self, title):
@@ -1658,13 +1704,15 @@ class Screen:
 
     def draw_set_taal(self):
         self.setting_page("Taal")
-        if self.compact:
-            tile, size = (lambda i: (140, 120 + i * 64, 200, 52)), 20
-        else:
-            tile, size = (lambda i: (85 + i * 215, 150, 200, 64)), 24
-        for i, (code, name) in enumerate(LANGUAGES.items()):
-            self.pill(self.rect(*tile(i)), name, lambda c=code: self.change_setting("taal", c),
-                      active=code == self.settings["taal"], size=size)
+        # Raster; een halve laatste rij komt in het midden.
+        cols, w, h, gap, y0, size = (2, 150, 52, 10, 120, 20) if self.compact else (3, 200, 64, 15, 130, 24)
+        items = list(LANGUAGES.items())
+        for i, (code, name) in enumerate(items):
+            row, col = divmod(i, cols)
+            in_row = min(cols, len(items) - row * cols)
+            x = self.cx - (in_row * w + (in_row - 1) * gap) // 2 + col * (w + gap)
+            self.pill(self.rect(x, y0 + row * (h + gap + 10), w, h), name,
+                      lambda c=code: self.change_setting("taal", c), active=code == self.settings["taal"], size=size)
 
     def draw_set_kleur(self):
         """Elke kleur staat als knop in die kleur; de gekozen krijgt een witte rand."""
@@ -1730,6 +1778,123 @@ class Screen:
         ]
         self._info_at = now
         return self._info
+
+    # -- instellingen via je telefoon (zie web.py) --
+
+    def web_url(self):
+        ip = local_ip()
+        return f"http://{ip}:{self.web_port}" if self.web_port and ip else None
+
+    def web_fields(self):
+        """De velden van de webpagina: dezelfde keuzes als onder het tandwiel."""
+        night = tr("Nachtmodus")
+        return [
+            {"key": "weer_plaats", "type": "text", "label": tr("Weer"), "placeholder": tr("Plaats, bijv. Utrecht")},
+            {"key": "rust_scherm", "type": "choice", "label": tr("Rustscherm"),
+             "options": [("hoes", tr("Hoes")), ("klok", tr("Klok"))]},
+            {"key": "idle_min", "type": "choice", "label": tr("Na hoeveel minuten zonder aanraken"),
+             "options": [(m, tr("na {minutes} min", minutes=m) if m else tr("Nooit")) for m in IDLE_OPTIONS]},
+            {"key": "nacht_stijl", "type": "choice", "label": night,
+             "options": [(k, tr(k.capitalize())) for k in NIGHT_STYLES]},
+            {"key": "nacht_van", "type": "time", "label": tr("Vanaf"), "group": tr("Nachttijden")},
+            {"key": "nacht_tot", "type": "time", "label": tr("Tot"), "group": tr("Nachttijden"), "last": True},
+            {"key": "lettertype", "type": "choice", "label": tr("Lettertype"),
+             "options": [(k, tr(label)) for k, label, _ in FONTS]},
+            {"key": "kleur", "type": "choice", "label": tr("Kleur"),
+             "options": [(k, tr(label)) for k, label, _ in ACCENTS]},
+            {"key": "taal", "type": "choice", "label": tr("Taal"), "options": list(LANGUAGES.items())},
+            {"key": "draaien", "type": "choice", "label": tr("Scherm"),
+             "options": [(deg, tr(label)) for deg, label in ROTATIONS]},
+        ]
+
+    def web_describe(self):
+        current = dict(self.settings)
+        current["idle_min"] = f"{current['idle_min']:g}"   # 5.0 -> "5", zoals de keuzes
+        return self.web_fields(), current, "#%02x%02x%02x" % ACCENT
+
+    def web_validate(self, key, value):
+        """De waarde in de goede vorm, of None als hij niet mag."""
+        if key == "weer_plaats":
+            return value[:60]
+        if key in ("nacht_van", "nacht_tot"):
+            try:
+                h, m = (int(x) for x in value.split(":")[:2])
+            except ValueError:
+                return None
+            return f"{h:02d}:{m:02d}" if 0 <= h < 24 and 0 <= m < 60 else None
+        field = next((f for f in self.web_fields() if f["key"] == key), None)
+        for option, _ in (field or {}).get("options", []):
+            if str(option) == value:
+                return option
+        return None
+
+    def draw_set_web(self):
+        self.setting_page("Via je telefoon")
+        url = self.web_url()
+        if not url:
+            text = (tr("Geen netwerk.") if self.web_port else
+                    tr("Staat uit. Zet SPOTISCHERM_WEB_POORT in config.env om dit aan te zetten."))
+            self.paragraph(text, 20, MUTED, self.pt(self.cx, 240), self.px(320 if self.compact else 600))
+            return
+        name = f"http://{socket.gethostname()}.local:{self.web_port}"
+        lines = [(tr("Scan met je telefoon, of open:"), MUTED), (url, TEXT), (name, TEXT),
+                 (tr("Je telefoon moet op hetzelfde wifi-netwerk zitten."), MUTED)]
+        if self.compact:
+            size, top, text_y, max_w = {"rond": (160, 80, 262), "staand": (300, -40, 290)}[self.shape] + (
+                (300 if self.round else 440),)
+            if self.qr.available:
+                code = self.qr.get(url, self.px(size))
+                self.s.blit(code, code.get_rect(midtop=self.pt(self.cx, top)))
+            size, step = (15, 24) if self.round else (18, 30)
+            for i, (line, color) in enumerate(lines[:-1]):
+                self.text(line, size, color, self.pt(self.cx, text_y + i * step), anchor="center", max_w=self.px(max_w))
+            # De laatste (lange) zin mag over twee regels.
+            self.paragraph(lines[-1][0], size, MUTED, self.pt(self.cx, text_y + 3 * step + step // 2),
+                           self.px(max_w - 40))
+            return
+        if self.qr.available:
+            code = self.qr.get(url, self.px(300))
+            self.s.blit(code, self.rect(50, 90, 300, 300))
+        for i, (line, color) in enumerate(lines):
+            self.paragraph(line, 22 if color == TEXT else 18, color, self.pt(575, 150 + i * 60), self.px(400))
+
+    def draw_set_power(self):
+        """Herstarten en uitzetten, met eerst een vraag of je het zeker weet."""
+        self.setting_page("Aan/uit")
+        if self.compact:
+            text_pos, max_w, boxes, size = (240, 140), 320, ((140, 196, 200, 56), (140, 266, 200, 56)), 20
+        else:
+            text_pos, max_w, boxes, size = (400, 120), 680, ((120, 190, 260, 84), (420, 190, 260, 84)), 26
+        what = self.power_confirm
+        if what:
+            question = tr("Herstarten: weet je het zeker?") if what == "reboot" else tr("Uitzetten: weet je het zeker?")
+            self.paragraph(question, 22, TEXT, self.pt(*text_pos), self.px(max_w))
+            yes = tr("Ja, herstarten") if what == "reboot" else tr("Ja, uitzetten")
+            self.pill(self.rect(*boxes[0]), yes, lambda: self.power(what), active=True, size=size)
+            self.pill(self.rect(*boxes[1]), tr("Annuleer"), lambda: setattr(self, "power_confirm", None), size=size)
+            return
+        self.paragraph(tr("Zet de Pi zo uit voordat je de stekker eruit haalt. Dat beschermt de SD-kaart."),
+                       18, MUTED, self.pt(*text_pos), self.px(max_w))
+        self.pill(self.rect(*boxes[0]), tr("Herstarten"), lambda: setattr(self, "power_confirm", "reboot"), size=size)
+        self.pill(self.rect(*boxes[1]), tr("Uitzetten"), lambda: setattr(self, "power_confirm", "poweroff"), size=size)
+
+    def power(self, what):
+        self.power_confirm = None
+        if not sys.platform.startswith("linux"):
+            self.p.say(tr("Dit kan alleen op de Pi"))
+            return
+        if what == "reboot":
+            self.draw_message(tr("De Pi start opnieuw op…"), [tr("Even geduld, de app komt zo terug.")])
+        else:
+            self.draw_message(tr("De Pi gaat uit…"),
+                              [tr("Wacht tot het groene lampje niet meer knippert, dan kan de stekker eruit.")])
+        # Mag zonder wachtwoord dankzij /etc/sudoers.d/spotischerm (zie install.sh).
+        try:
+            failed = subprocess.run(["sudo", "-n", "systemctl", what], capture_output=True, timeout=20).returncode
+        except (OSError, subprocess.TimeoutExpired):
+            failed = True
+        if failed:
+            self.p.say(tr("Geen toestemming. Voer op de Pi opnieuw bash install.sh uit."), 7)
 
     def draw_info(self):
         self.setting_page("Info")
@@ -2039,7 +2204,7 @@ class Screen:
         self.view, self.scroll = "settings", 0
 
     def open_setting(self, page):
-        self.view = page
+        self.view, self.power_confirm = page, None
 
     def apply_settings(self):
         s = self.settings
@@ -2124,7 +2289,7 @@ class Screen:
             return
         if not self.press or self.view in ("now", "menu", "timer", "keyboard",
                                               "set_weer", "set_rust", "set_nacht", "set_font", "set_taal",
-                                              "set_kleur", "set_scherm", "info", "share"):
+                                              "set_kleur", "set_scherm", "info", "share", "set_power", "set_web"):
             return
         dy = pos[1] - self.press[0][1]
         if abs(dy) > self.px(12):
@@ -2132,11 +2297,33 @@ class Screen:
         if self.dragging:
             self.scroll = max(0, self.press[1] - dy)
 
+    def swipe(self, pos):
+        """Opzij vegen. Op het hoofdscherm: naar links het volgende nummer, naar rechts het vorige.
+        Op andere schermen: naar rechts is terug, zoals op een telefoon."""
+        (x0, y0), _ = self.press
+        dx, dy = pos[0] - x0, pos[1] - y0
+        if abs(dx) < self.px(SWIPE_MIN) or abs(dx) < 1.5 * abs(dy):
+            return False
+        if self.view == "now":
+            if dx < 0:
+                self.p.next()
+                self.p.say(tr("Volgend nummer"), 1.5)
+            else:
+                self.p.previous()
+                self.p.say(tr("Vorig nummer"), 1.5)
+        elif dx > 0 and self.back_action and self.view != "keyboard":
+            self.back_action()
+        else:
+            return False
+        return True
+
     def on_up(self, pos):
         if self.drag:
             _, _, to_frac, on_release, _ = self.drag
             self.drag = None
             on_release(to_frac(pos))
+        elif self.press and not self.swallow and self.swipe(pos):
+            pass
         elif self.press and not self.dragging and not self.swallow:
             for r, action in reversed(self.buttons):
                 if r.collidepoint(pos):
@@ -2238,10 +2425,27 @@ def main():
         time.sleep(1)
 
     ui.p = Player(small_art=economy)
+    web = None
+    port = int(os.environ.get("SPOTISCHERM_WEB_POORT", "8080").strip() or 0)
+    if port:
+        web = SettingsServer(port, ui.web_describe, ui.web_validate)
+        web.start()
+        ui.web_port = port
     touch_fps, calm_fps = ECONOMY_FPS if economy else (FPS, CALM_FPS)
     clock = pygame.time.Clock()
     finger = None
     while True:
+        changed = False
+        while web:  # wijzigingen van de webpagina; die passen we hier toe, niet in de webthread
+            try:
+                key, value = web.changes.get_nowait()
+            except queue.Empty:
+                break
+            ui.change_setting(key, value)
+            web.changes.task_done()
+            changed = True
+        if changed:
+            ui.p.say(tr("Instellingen aangepast via je telefoon"), 3)
         for ev in pygame.event.get():
             if ev.type == pygame.QUIT:
                 return

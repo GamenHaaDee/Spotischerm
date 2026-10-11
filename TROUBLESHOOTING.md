@@ -364,12 +364,10 @@ sudo sed -i "s/^User=root/User=$USER/" /etc/systemd/system/spotischerm.service
 sudo systemctl daemon-reload && sudo systemctl restart spotischerm
 ```
 
-**Optional:** let your user start, stop and restart the app without a password, and nothing
-else. This is handy while testing over SSH:
-
-```bash
-echo "$USER ALL=(root) NOPASSWD: /usr/bin/systemctl start spotischerm, /usr/bin/systemctl stop spotischerm, /usr/bin/systemctl restart spotischerm" | sudo tee /etc/sudoers.d/spotischerm
-```
+**No password needed for a few commands.** `install.sh` places `/etc/sudoers.d/spotischerm`, which
+lets your user run exactly these commands without a password, and nothing else: shut down and
+restart the Pi (the buttons under Settings → Power), and stop, start or restart the app (handy
+when testing over SSH). If the Power buttons say "No permission", run `bash install.sh` again.
 
 ---
 

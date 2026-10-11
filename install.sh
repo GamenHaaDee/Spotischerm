@@ -23,6 +23,17 @@ python3 -m venv --system-site-packages .venv
 # Toegang tot scherm en touchscreen zonder desktop
 sudo usermod -aG video,input,render "$USER"
 
+# Zonder wachtwoord: de Pi uitzetten of herstarten (knoppen onder Instellingen > Aan/uit) en de
+# app zelf stoppen/starten. Verder niets. Eerst controleren met visudo, zodat sudo nooit stukgaat.
+rule=$(mktemp)
+echo "$USER ALL=(root) NOPASSWD: /usr/bin/systemctl poweroff, /usr/bin/systemctl reboot, /usr/bin/systemctl stop spotischerm, /usr/bin/systemctl start spotischerm, /usr/bin/systemctl restart spotischerm" > "$rule"
+if sudo visudo -cqf "$rule"; then
+  sudo install -m 440 -o root -g root "$rule" /etc/sudoers.d/spotischerm
+else
+  echo "Let op: sudo-regel voor Aan/uit niet geplaatst" >&2
+fi
+rm -f "$rule"
+
 [ -f config.env ] || cp config.example.env config.env
 
 sed "s|__USER__|$USER|g; s|__DIR__|$PWD|g" spotischerm.service \

@@ -41,10 +41,15 @@ op een Raspberry Pi, van de allereerste Pi 1 tot de Pi 5.
   de tijd erbij. Speelt er niks, dan zie je een klok met weer en regenverwachting.
 - **Nachtmodus:** in het uur voor de nacht wordt het scherm langzaam donkerder. 's Nachts toont
   het een zeer gedimde rode of grijze klok, of wordt het helemaal zwart.
+- **Vegen:** veeg op het hoofdscherm naar links voor het volgende nummer en naar rechts voor het
+  vorige. Op andere schermen veeg je naar rechts om terug te gaan.
 - **Lange titels** schuiven als een lichtkrant.
 - **Instellingen op het scherm:** weer, rustscherm, nachtmodus, lettertype (7 keuzes), kleur
-  (5 kleuren of de kleur van de hoes), taal (Nederlands, English, Deutsch), scherm draaien
-  (liggend, staand, ondersteboven) en een info-pagina met IP-adres, wifi, temperatuur en versie.
+  (5 kleuren of de kleur van de hoes), taal (Nederlands, English, Deutsch, Français, Español), scherm draaien
+  (liggend, staand, ondersteboven), een info-pagina met IP-adres, wifi, temperatuur en versie, en
+  knoppen om de Pi veilig te herstarten of uit te zetten.
+- **Instellingen via je telefoon:** dezelfde instellingen op een webpagina, op
+  `http://spotischerm.local:8080`. Onder Instellingen → Via je telefoon toont het scherm een QR-code.
 - **Drie schermvormen:** liggend, rond (bijv. Waveshare 1080×1080) en staand, elk met een eigen
   indeling.
 
@@ -245,8 +250,8 @@ scp -r spotify-scherm/app JOUWNAAM@spotischerm.local:~/spotify-scherm/
    rm -rf ~/spotify-scherm
    ```
 
-3. Draai de aanpassingen terug die je eventueel zelf hebt gedaan: een `video=...` vooraan in
-   `/boot/firmware/cmdline.txt`, en `/etc/sudoers.d/spotischerm`.
+3. Haal `/etc/sudoers.d/spotischerm` weg (`sudo rm /etc/sudoers.d/spotischerm`), en een
+   `video=...` vooraan in `/boot/firmware/cmdline.txt` als je die zelf hebt toegevoegd.
 4. Trek de toegang in bij Spotify: haal je app weg onder
    [Apps beheren](https://www.spotify.com/account/apps/) in je Spotify-account. De app zelf kun je
    ook verwijderen in het [developer-dashboard](https://developer.spotify.com/dashboard).
@@ -271,6 +276,7 @@ SpotiScherm heeft geen eigen server en verzamelt niks. De app praat alleen met d
 | **Open-Meteo** (open-meteo.com) | De plaatsnaam die je instelt, en daarna de coördinaten ervan voor het weer | alleen als je een weerplaats instelt, elk kwartier |
 | **LRCLIB** (lrclib.net) | Titel, artiest, album en lengte van het nummer dat speelt | alleen als je de songtekst opent |
 | **Je eigen netwerk** | Zoeken naar speakers via mDNS, en Spotify Connect-apparaten naar hun naam vragen | zolang de app draait; dit blijft in je eigen netwerk |
+| **Je eigen netwerk** | De instellingenpagina op poort 8080. Iedereen op je wifi kan hem openen; hij toont en wijzigt alleen de scherminstellingen, nooit je Spotify-sleutels of wachtwoorden | zolang de app draait; uitzetten met `SPOTISCHERM_WEB_POORT=0` |
 
 Alles wat van jou is, blijft op de Pi: je Spotify-sleutels (`config.env`), je login
 (`.spotify-cache`) en je instellingen (`instellingen.json`). De `.gitignore` zorgt dat die niet per

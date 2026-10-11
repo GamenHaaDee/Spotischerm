@@ -6,7 +6,7 @@ A touchscreen for your room or your wall that controls Spotify and sends the mus
 Spotify Connect device in your home: Sonos, smart speakers, TV, PC or phone. It runs on a
 Raspberry Pi, from the very first Pi 1 up to the Pi 5.
 
-*"Scherm" is Dutch for "screen". The app speaks English, Dutch and German.*
+*"Scherm" is Dutch for "screen". The app speaks English, Dutch, German, French and Spanish.*
 
 ![Now playing](docs/screen-now.en.png)
 
@@ -42,11 +42,15 @@ Raspberry Pi, from the very first Pi 1 up to the Pi 5.
   the time. When nothing is playing, you get a clock with the weather and a rain forecast.
 - **Night mode:** the screen slowly dims in the hour before night. At night it shows a very dim red
   or grey clock, or goes completely black.
+- **Swipe:** on the main screen, swipe left for the next song and right for the previous one. On
+  other screens, swipe right to go back.
 - **Long titles** scroll like a news ticker.
 - **Settings on the screen:** weather, idle screen, night mode, font (7 choices), colour (5 colours,
-  or the colour of the album cover), language (English, Dutch, German), screen rotation
-  (landscape, portrait, upside down), and an info page with IP address, Wi-Fi, temperature and
-  version.
+  or the colour of the album cover), language (English, Dutch, German, French, Spanish), screen rotation
+  (landscape, portrait, upside down), an info page with IP address, Wi-Fi, temperature and
+  version, and buttons to restart or shut down the Pi safely.
+- **Settings from your phone:** the same settings on a web page, at `http://spotischerm.local:8080`.
+  Under Settings → From your phone the screen shows a QR code with the address.
 - **Three screen shapes:** landscape, round (for example Waveshare 1080×1080) and portrait, each
   with its own layout.
 
@@ -244,8 +248,8 @@ scp -r spotify-scherm/app YOURNAME@spotischerm.local:~/spotify-scherm/
    rm -rf ~/spotify-scherm
    ```
 
-3. Undo the optional changes you made yourself, if any: a `video=...` part at the start of
-   `/boot/firmware/cmdline.txt`, and `/etc/sudoers.d/spotischerm`.
+3. Remove `/etc/sudoers.d/spotischerm` (`sudo rm /etc/sudoers.d/spotischerm`), and undo a
+   `video=...` part at the start of `/boot/firmware/cmdline.txt` if you added one.
 4. Revoke the access at Spotify: under [Manage apps](https://www.spotify.com/account/apps/) on
    your Spotify account, remove your app. You can also delete the app itself in the
    [developer dashboard](https://developer.spotify.com/dashboard).
@@ -269,6 +273,7 @@ SpotiScherm has no server of its own and collects nothing. The app only talks to
 | **Open-Meteo** (open-meteo.com) | The place name you enter, then its coordinates for the forecast | only if you set a weather location, every 15 minutes |
 | **LRCLIB** (lrclib.net) | Title, artist, album and length of the song that's playing | only when you open the lyrics |
 | **Your own network** | Looking for speakers over mDNS, and asking Spotify Connect devices for their name | while the app runs; this stays on your network |
+| **Your own network** | The settings page on port 8080. Anyone on your Wi-Fi can open it; it shows and changes only the screen settings, never your Spotify keys or passwords | while the app runs; turn it off with `SPOTISCHERM_WEB_POORT=0` |
 
 Everything personal stays on the Pi: your Spotify keys (`config.env`), your login
 (`.spotify-cache`) and your settings (`instellingen.json`). The `.gitignore` keeps them out of git.

@@ -53,7 +53,7 @@ You can also change these on the screen. See the [mapping table](#instellingenjs
 | `NACHT_STIJL` | `rood` | `uit`, `zwart`, `rood`, `grijs` | Night mode: off, black screen, dim red clock, or dim grey clock |
 | `NACHT_VAN` | `23:00` | `HH:MM` | Start of the night. Leave `NACHT_VAN` and `NACHT_TOT` both empty to turn night mode off |
 | `NACHT_TOT` | `07:00` | `HH:MM` | End of the night |
-| `TAAL` | `nl` | `nl`, `en`, `de` | Language of the app |
+| `TAAL` | `nl` | `nl`, `en`, `de`, `fr`, `es` | Language of the app |
 | `LETTERTYPE` | `standaard` | `standaard`, `roboto`, `opensans`, `lato`, `comic`, `serif`, `mono` | Font. `install.sh` installs them all on the Pi |
 | `KLEUR` | `groen` | `groen`, `blauw`, `oranje`, `roze`, `paars`, `hoes` | Accent colour for buttons and bars. `hoes` = taken from the album cover of each song |
 | `GAST_WIFI_NAAM` | *(empty)* | network name | Guest Wi-Fi for the Share page: guests scan the QR code and join. Empty = no Wi-Fi QR code |
@@ -71,6 +71,7 @@ You can also change these on the screen. See the [mapping table](#instellingenjs
 | `SPOTISCHERM_WINDOWED` | `0` | `0`, `1` | `1` = run in an 800×480 window (540×540 when round), for testing on a PC |
 | `SPOTISCHERM_MUIS` | `0` | `0`, `1` | `1` = show the mouse cursor in full screen. Not available in framebuffer mode |
 | `SPOTISCHERM_TOON_FPS` | `0` | `0`, `1` | `1` = show frames per second and milliseconds per frame in the top right |
+| `SPOTISCHERM_WEB_POORT` | `8080` | a port number, or `0` | Port of the settings page for your phone (`http://spotischerm.local:8080`). `0` = off. Ports below 1024 don't work, the app doesn't run as root |
 
 ### Set by the service
 
