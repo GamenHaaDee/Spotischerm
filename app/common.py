@@ -18,6 +18,8 @@ SCOPES = " ".join([
     "playlist-read-private",
     "playlist-read-collaborative",
     "user-read-recently-played",
+    "user-library-read",
+    "user-library-modify",
 ])
 
 

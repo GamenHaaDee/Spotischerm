@@ -7,7 +7,7 @@ import time
 import requests
 
 API = "https://lrclib.net/api"
-HEADERS = {"User-Agent": "SpotiScherm/1.1 (hobbyproject)"}
+HEADERS = {"User-Agent": "SpotiScherm/1.2 (hobbyproject)"}
 RETRY_SECONDS = 60
 STAMP = re.compile(r"\[(\d+):(\d+(?:\.\d+)?)\]")
 

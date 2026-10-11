@@ -1,0 +1,70 @@
+name: Works on my Pi
+description: Tell us about hardware you tested, so it can be added to the compatibility table
+labels: ["hardware"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Got SpotiScherm running on a Pi or screen that isn't marked ✅ in the README yet? Great, let us know!
+
+  - type: dropdown
+    id: pi
+    attributes:
+      label: Raspberry Pi model
+      options:
+        - Pi 1 (A, A+, B, B+)
+        - Pi Zero / Zero W
+        - Pi Zero 2 W
+        - Pi 2B
+        - Pi 3B / 3B+ / 3A+
+        - Pi 4
+        - Pi 5
+        - Other
+    validations:
+      required: true
+
+  - type: input
+    id: screen
+    attributes:
+      label: Screen
+      description: Brand/model, size and resolution, and how it's connected
+      placeholder: 5" HDMI 1024×600 with USB touch
+    validations:
+      required: true
+
+  - type: input
+    id: os
+    attributes:
+      label: Operating system
+      placeholder: Raspberry Pi OS Lite 32-bit (Trixie)
+
+  - type: textarea
+    id: settings
+    attributes:
+      label: Extra settings needed
+      description: For example SPOTISCHERM_FRAMEBUFFER=1, SPOTISCHERM_ZUINIG=1, a video= line in cmdline.txt, or "none"
+    validations:
+      required: true
+
+  - type: input
+    id: fps
+    attributes:
+      label: Frames per second
+      description: Set SPOTISCHERM_TOON_FPS=1 and read the number while touching the screen
+      placeholder: "24"
+
+  - type: checkboxes
+    id: works
+    attributes:
+      label: What works
+      options:
+        - label: Picture
+        - label: Touch
+        - label: Playback control
+        - label: Album covers and lyrics
+
+  - type: textarea
+    id: notes
+    attributes:
+      label: Notes
+      description: Anything else worth knowing (power supply, case, problems you solved)

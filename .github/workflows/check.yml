@@ -1,0 +1,42 @@
+name: Check
+
+on:
+  push:
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  check:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.13"   # same as Raspberry Pi OS (Trixie)
+
+      - name: Install ruff
+        run: pip install ruff
+
+      - name: Python compiles
+        run: python -m compileall -q app
+
+      - name: Lint (pyflakes)
+        run: ruff check app --select F --target-version py311
+
+      - name: Translations complete
+        run: python .github/scripts/check_i18n.py
+
+      - name: Shell scripts
+        run: bash -n install.sh
+
+      - name: No secrets committed
+        run: |
+          for f in config.env .spotify-cache instellingen.json; do
+            if git ls-files --error-unmatch "$f" >/dev/null 2>&1; then
+              echo "::error::$f must not be in the repository (it is in .gitignore)"; exit 1
+            fi
+          done
+          echo "No private files in the repository"

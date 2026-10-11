@@ -43,11 +43,19 @@ op een Raspberry Pi, van de allereerste Pi 1 tot de Pi 5.
   het een zeer gedimde rode of grijze klok, of wordt het helemaal zwart.
 - **Vegen:** veeg op het hoofdscherm naar links voor het volgende nummer en naar rechts voor het
   vorige. Op andere schermen veeg je naar rechts om terug te gaan.
+- **Artiest- en albumpagina:** tik op de naam van de artiest of het album op het hoofdscherm, of op
+  een artiest of album in de zoekresultaten. Je ziet hun nummers en albums en speelt van daaruit af.
+- **Liken:** tik op het hartje naast de titel om het nummer aan je Gelikete nummers toe te voegen,
+  of er weer uit te halen.
 - **Lange titels** schuiven als een lichtkrant.
 - **Instellingen op het scherm:** weer, rustscherm, nachtmodus, lettertype (7 keuzes), kleur
   (5 kleuren of de kleur van de hoes), taal (Nederlands, English, Deutsch, Français, Español), scherm draaien
   (liggend, staand, ondersteboven), een info-pagina met IP-adres, wifi, temperatuur en versie, en
   knoppen om de Pi veilig te herstarten of uit te zetten.
+- **Updates:** de app kijkt op GitHub of er een nieuwe versie is en meldt dat. Onder
+  Instellingen → Bijwerken installeer je hem met één tik; je instellingen en login blijven staan.
+- **Verzoekjes van gasten:** gasten scannen een QR-code op de Delen-pagina, zoeken op hun telefoon
+  een nummer en zetten het in de wachtrij (maximaal 3 per gast per kwartier).
 - **Instellingen via je telefoon:** dezelfde instellingen op een webpagina, op
   `http://spotischerm.local:8080`. Onder Instellingen → Via je telefoon toont het scherm een QR-code.
 - **Drie schermvormen:** liggend, rond (bijv. Waveshare 1080×1080) en staand, elk met een eigen
@@ -276,6 +284,8 @@ SpotiScherm heeft geen eigen server en verzamelt niks. De app praat alleen met d
 | **Open-Meteo** (open-meteo.com) | De plaatsnaam die je instelt, en daarna de coördinaten ervan voor het weer | alleen als je een weerplaats instelt, elk kwartier |
 | **LRCLIB** (lrclib.net) | Titel, artiest, album en lengte van het nummer dat speelt | alleen als je de songtekst opent |
 | **Je eigen netwerk** | Zoeken naar speakers via mDNS, en Spotify Connect-apparaten naar hun naam vragen | zolang de app draait; dit blijft in je eigen netwerk |
+| **GitHub** (api.github.com) | Vragen welke versie de nieuwste is, en die downloaden als je op Bijwerken tikt | elke 6 uur; uitzetten met `SPOTISCHERM_UPDATES=0` |
+| **Je eigen netwerk** | De verzoekjespagina (`/verzoekjes`): iedereen op je wifi kan zoeken en nummers in de wachtrij zetten | zolang de app draait; uitzetten met `SPOTISCHERM_VERZOEKJES=0` |
 | **Je eigen netwerk** | De instellingenpagina op poort 8080. Iedereen op je wifi kan hem openen; hij toont en wijzigt alleen de scherminstellingen, nooit je Spotify-sleutels of wachtwoorden | zolang de app draait; uitzetten met `SPOTISCHERM_WEB_POORT=0` |
 
 Alles wat van jou is, blijft op de Pi: je Spotify-sleutels (`config.env`), je login

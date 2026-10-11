@@ -11,10 +11,16 @@ from common import make_client
 print(__doc__)
 sp = make_client()
 me = sp.current_user()
-print(f"\nIngelogd als {me.get('display_name') or me['id']} ({me.get('product', '?')}).")
+# Het abonnement ('product') geeft Spotify sinds februari 2026 niet meer aan eigen apps.
+# Komt het toch mee (bijv. bij een app met uitgebreide toegang), dan tonen we het.
+product = me.get("product")
+plan = f" (Spotify {product.capitalize()})" if product else ""
+print(f"\nIngelogd als {me.get('display_name') or me['id']}{plan}.")
 
-if me.get("product") != "premium":
+if product and product != "premium":
     print("Let op: afspelen bedienen via de Web API werkt alleen met Spotify Premium.")
+elif not product:
+    print("Afspelen bedienen werkt alleen met Spotify Premium (het abonnement kan de app zelf niet zien).")
 
 devices = sp.devices().get("devices", [])
 if devices:

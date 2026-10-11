@@ -5,6 +5,10 @@
 // Daarnaast 4 voetjes die de bak 8 mm van de muur houden, zodat de ventilator
 // zijn warme lucht kwijt kan.
 //
+// Optioneel (aan/uit in de Customizer): keystone-poorten onderin voor USB of netwerk,
+// een volumeknop (draaiknop EC11) in de rechterzijkant en een bewegingssensor (mini-PIR)
+// in de onderkant, die schuin naar voren de kamer in kijkt.
+//
 // Alle maten in mm. Pas in OpenSCAD de waarden aan via Window > Customizer.
 // MEET JE EIGEN SCHERM OP: de standaardwaarden zijn voor een gangbaar 7"-HDMI-scherm
 // (zoals het Waveshare 7inch HDMI LCD (C)), maar elk merk is net anders.
@@ -18,10 +22,12 @@
 //  - Noctua NF-A4x10 5V (40x40x10 mm) + 4x M3x16 met moer, of de schroeven van Noctua
 //  - Adafruit 4056: USB-C (female) naar micro-B (male), met de 2 M3-schroefjes die erbij zitten
 //  - dun schuimtape om het scherm stevig in de voorkant te klemmen
+//  - optioneel: keystone-modules (USB-A en/of RJ45) met een kort kabeltje naar de Pi,
+//    een EC11-draaiknop met drukknop, en een mini-PIR (bijv. AM312)
 
 /* [Wat laten zien] */
-// printen = alle delen naast elkaar, samen = in elkaar gezet, test_usbc = proefstukje voor de USB-C-uitsparing
-deel = "samen"; // [samen, printen, voor, achter, voetjes, test_usbc]
+// printen = alle delen naast elkaar, samen = in elkaar gezet, test_* = proefstukjes
+deel = "samen"; // [samen, printen, voor, achter, voetjes, test_usbc, test_keystone, test_knop]
 
 /* [Scherm] */
 // Breedte van de schermmodule (het grootste: glas of printplaat)
@@ -78,6 +84,46 @@ usbc_oor = 20;
 // Plek van het midden, gemeten vanaf de linker buitenkant
 usbc_x = 40;
 
+/* [Extra poorten onderin (keystone)] */
+// Aantal keystone-gaten in de onderkant (0 = geen). Er past elke keystone-module in:
+// USB-A, RJ45 (netwerk), HDMI... Binnenin een kort kabeltje naar de Pi.
+keystones = 2; // [0:1:3]
+// Afstand van het eerste gat tot de rechter binnenwand
+keystone_rechts = 10;
+// Hoogte van het midden, gemeten vanaf de achterkant (buitenkant)
+keystone_z = 15;
+// Standaard keystone-uitsparing (breedte x hoogte); bij een te strakke klik 0,2 mm groter maken
+keystone_b = 14.9;
+keystone_h = 16.3;
+// Keystones klikken in een plaat van ~1,5-2,2 mm: de wand wordt rond het gat zo dun
+keystone_wand = 1.8;
+
+/* [Volumeknop (zijkant)] */
+volumeknop = true;
+// Gat voor de as/schroefbus van een EC11-draaiknop (M7)
+knop_gat = 7.2;
+// Plek op de rechterzijkant: hoogte vanaf de onderkant (buitenkant) en vanaf de achterkant
+knop_y = 48;
+knop_z = 17;
+// Gaatje voor het nokje dat de knop tegen draaien zet (0 = geen)
+knop_nok = 2.6;
+// Kommetje aan de buitenkant waar de moer in wegvalt, zodat alleen het knopje uitsteekt
+knop_kom = 12.5;
+knop_kom_diepte = 2;
+// Ring aan de binnenkant, zodat de wand rond het gat sterk genoeg blijft
+knop_ring = 18;
+
+/* [Bewegingssensor (onderkant)] */
+// Gat in de onderkant voor een mini-PIR (bijv. AM312); de kegel van ~100 graden ziet de kamer in
+bewegingssensor = true;
+// Gat voor de lens
+pir_gat = 10;
+// Plek: vanaf de linker buitenkant, en hoogte vanaf de achterkant (hoe hoger, hoe dichter bij de voorkant)
+pir_x = 62;
+pir_z = 18;
+// Kraag aan de binnenkant waar het printplaatje tegenaan komt (0 = geen)
+pir_kraag = 14;
+
 $fn = 48;
 
 // ---- afgeleide maten ----
@@ -87,6 +133,8 @@ B = binnen_b + 2 * wand;
 H = binnen_h + 2 * wand;
 voor_d = scherm_d + voorplaat;
 achter_d = wand + diepte_achter;
+scherm_y = wand + rand;                        // onderkant van het schermvak
+scherm_cy = scherm_y + speling + scherm_h / 2; // midden van het scherm
 
 // Schroeven in het midden van de rand, iets van de hoeken af (de hoeken zijn rond)
 c = (wand + rand) / 2;
@@ -94,6 +142,12 @@ schroeven = [[c, c + 10], [B - c, c + 10], [c, H - c - 10], [B - c, H - c - 10]]
 voetjes = [[8, 8], [B - 8, 8], [8, H - 8], [B - 8, H - 8]];
 fan_c = [B - wand - fan_marge - fan_maat / 2, H - wand - fan_marge - fan_maat / 2];
 sleutelgaten = [[B / 2 - 35, H - wand - 22], [B / 2 + 35, H - wand - 22]];
+// Keystones van rechts naar links in de onderkant
+keystone_xs = keystones > 0
+    ? [for (i = [0:keystones - 1]) B - wand - keystone_rechts - keystone_b / 2 - i * (keystone_b + 8)] : [];
+keystone_links = keystones > 0 ? keystone_xs[keystones - 1] - keystone_b / 2 - 6 : B - 30;
+// ventilatiesleuven onderin pas na de USB-C-ingang en de bewegingssensor
+sleuf_start = bewegingssensor ? pir_x + pir_gat / 2 + 6 : 62;
 
 module rrect(b, h, r) {
     translate([r, r]) offset(r = r) square([b - 2 * r, h - 2 * r]);
@@ -104,13 +158,13 @@ module voor() {
     difference() {
         linear_extrude(voor_d) rrect(B, H, hoekstraal);
         // vak voor het scherm, open naar achteren
-        translate([wand + rand, wand + rand, -1])
+        translate([wand + rand, scherm_y, -1])
             cube([scherm_b + 2 * speling, scherm_h + 2 * speling, scherm_d + 1]);
         // venster, schuin naar voren zodat de rand niet in beeld valt
         hull() {
-            translate([B / 2 + zicht_dx - zicht_b / 2, H / 2 + zicht_dy - zicht_h / 2, scherm_d - 0.01])
+            translate([B / 2 + zicht_dx - zicht_b / 2, scherm_cy + zicht_dy - zicht_h / 2, scherm_d - 0.01])
                 cube([zicht_b, zicht_h, 0.01]);
-            translate([B / 2 + zicht_dx - zicht_b / 2 - voorplaat, H / 2 + zicht_dy - zicht_h / 2 - voorplaat, voor_d])
+            translate([B / 2 + zicht_dx - zicht_b / 2 - voorplaat, scherm_cy + zicht_dy - zicht_h / 2 - voorplaat, voor_d])
                 cube([zicht_b + 2 * voorplaat, zicht_h + 2 * voorplaat, 0.01]);
         }
         // voorgaten voor M3 (niet door de voorkant heen)
@@ -126,7 +180,7 @@ module klemrand() {
     difference() {
         translate([wand, wand, z0]) cube([binnen_b, binnen_h, L]);
         hull() {
-            translate([wand + rand + speling + klem, wand + rand + speling + klem, achter_d - 0.01])
+            translate([wand + rand + speling + klem, scherm_y + speling + klem, achter_d - 0.01])
                 cube([scherm_b - 2 * klem, scherm_h - 2 * klem, 0.02]);
             translate([wand - 0.01, wand - 0.01, z0 - 0.01]) cube([binnen_b + 0.02, binnen_h + 0.02, 0.02]);
         }
@@ -140,6 +194,22 @@ module sleutelgat() {
     translate([0, 9, 0]) cylinder(d = 4.2, h = wand + 2);
 }
 
+module keystone_gat() {
+    // Uitsparing door de onderwand, met van binnen een dunner stuk wand waar de module in klikt.
+    translate([-keystone_b / 2, -1, -keystone_h / 2]) cube([keystone_b, wand + 2, keystone_h]);
+    translate([-keystone_b / 2 - 4, keystone_wand, -keystone_h / 2 - 4]) cube([keystone_b + 8, wand, keystone_h + 8]);
+}
+
+module knop_gat_vorm() {
+    // EC11: gat voor de schroefbus (door wand + ring), een gaatje voor het nokje, en
+    // aan de buitenkant een kommetje voor de moer.
+    rotate([0, 90, 0]) {
+        translate([0, 0, -knop_kom_diepte - 1]) cylinder(d = knop_gat, h = wand + knop_kom_diepte + 3);
+        if (knop_nok > 0) translate([0, 7.8, -knop_kom_diepte]) cylinder(d = knop_nok, h = wand + 1);
+        translate([0, 0, wand + 1 - knop_kom_diepte]) cylinder(d = knop_kom, h = knop_kom_diepte + 1);
+    }
+}
+
 module achter() {
     difference() {
         union() {
@@ -151,6 +221,12 @@ module achter() {
             klemrand();
             // kolommen voor de schroeven naar de voorkant
             for (p = schroeven) translate([p[0], p[1], 0]) cylinder(d = 8.4, h = achter_d);
+            // kraag rond de bewegingssensor, binnenin tegen de onderwand
+            if (bewegingssensor && pir_kraag > 0) translate([pir_x, wand - 0.01, pir_z]) rotate([-90, 0, 0])
+                difference() { cylinder(d = pir_kraag + 3, h = 3); translate([0, 0, -1]) cylinder(d = pir_kraag, h = 5); }
+            // ring rond de volumeknop, binnen tegen de rechterwand
+            if (volumeknop) translate([B - wand - knop_kom_diepte + 0.01, knop_y, knop_z]) rotate([0, 90, 0])
+                cylinder(d = knop_ring, h = knop_kom_diepte);
             // afstandhouders voor de Pi
             for (g = pi_gaten) translate([wand + pi_x + g[0], wand + pi_y + g[1], wand - 0.01])
                 cylinder(d = 6, h = pi_hoogte);
@@ -175,11 +251,17 @@ module achter() {
         for (k = sleutelgaten) translate([k[0], k[1], -1]) sleutelgat();
         // gaatjes voor de voetjes
         for (v = voetjes) translate([v[0], v[1], -1]) cylinder(d = 3.3, h = wand + 2);
-        // ventilatiesleuven: onder lucht erin, boven eruit
-        for (x = [62:6:B - 30]) translate([x, -1, wand + 4]) cube([2.5, wand + 2, 14]);
+        // ventilatiesleuven: onder lucht erin (niet bij de keystones), boven eruit
+        for (x = [sleuf_start:6:keystone_links - 3]) translate([x, -1, wand + 4]) cube([2.5, wand + 2, 14]);
         for (x = [30:6:B - 30]) translate([x, H - wand - 1, wand + 4]) cube([2.5, wand + 2, 14]);
         // USB-C-ingang in de onderkant
         translate([usbc_x, -1, wand + 12]) usbc_gat();
+        // extra poorten onderin
+        for (x = keystone_xs) translate([x, 0, keystone_z]) keystone_gat();
+        // bewegingssensor in de onderkant
+        if (bewegingssensor) translate([pir_x, -1, pir_z]) rotate([-90, 0, 0]) cylinder(d = pir_gat, h = wand + 2);
+        // volumeknop in de rechterzijkant
+        if (volumeknop) translate([B - wand - 1, knop_y, knop_z]) knop_gat_vorm();  // binnenkant wand op x = -1
     }
 }
 
@@ -205,6 +287,22 @@ module test_usbc() {
     }
 }
 
+module test_keystone() {
+    // Proefstukje: klikt je keystone-module er goed in?
+    difference() {
+        translate([-15, 0, -15]) cube([30, wand, 30]);
+        keystone_gat();
+    }
+}
+
+module test_knop() {
+    // Proefstukje: past de draaiknop, en zit het nokje goed?
+    difference() {
+        translate([0, -12, -12]) cube([wand, 30, 24]);
+        translate([-1, 0, 0]) knop_gat_vorm();
+    }
+}
+
 // ================= tonen =================
 if (deel == "voor") {
     translate([0, 0, voor_d]) mirror([0, 0, 1]) voor();     // voorkant op het bed
@@ -214,6 +312,10 @@ if (deel == "voor") {
     for (i = [0:3]) translate([i * 16, 0, 0]) voetje();
 } else if (deel == "test_usbc") {
     rotate([90, 0, 0]) test_usbc();
+} else if (deel == "test_keystone") {
+    rotate([90, 0, 0]) test_keystone();
+} else if (deel == "test_knop") {
+    rotate([0, -90, 0]) test_knop();
 } else if (deel == "printen") {
     achter();
     translate([0, H + 10, voor_d]) mirror([0, 0, 1]) voor();
@@ -221,10 +323,14 @@ if (deel == "voor") {
 } else {  // samen
     color("dimgray") achter();
     color("gray") translate([0, 0, achter_d]) voor();
-    color("black", 0.8) translate([wand + rand + speling, wand + rand + speling, achter_d])
+    color("black", 0.8) translate([wand + rand + speling, scherm_y + speling, achter_d])
         cube([scherm_b, scherm_h, scherm_d]);
-    color("green") for (g = [0]) translate([wand + pi_x, wand + pi_y, wand + pi_hoogte]) cube([85, 56, 1.6]);
+    color("green") translate([wand + pi_x, wand + pi_y, wand + pi_hoogte]) cube([85, 56, 1.6]);
     if (ventilator) color("sienna")
         translate([fan_c[0] - fan_maat / 2, fan_c[1] - fan_maat / 2, wand]) cube([fan_maat, fan_maat, 10]);
+    for (x = keystone_xs) color("white") translate([x - 7.5, wand, keystone_z - 9]) cube([15, 30, 18]);
+    // een laag knopje van 12 mm (bijv. aluminium, 6 mm hoog)
+    if (volumeknop) color("silver") translate([B + 0.5, knop_y, knop_z]) rotate([0, 90, 0]) cylinder(d = 12, h = 6);
+    if (bewegingssensor) color("white") translate([pir_x, 0, pir_z]) sphere(d = pir_gat - 1);
     for (v = voetjes) color("white") translate([v[0], v[1], 0]) mirror([0, 0, 1]) cylinder(d = 12, h = afstand_muur);
 }

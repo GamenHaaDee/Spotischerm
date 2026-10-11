@@ -71,6 +71,8 @@ You can also change these on the screen. See the [mapping table](#instellingenjs
 | `SPOTISCHERM_WINDOWED` | `0` | `0`, `1` | `1` = run in an 800×480 window (540×540 when round), for testing on a PC |
 | `SPOTISCHERM_MUIS` | `0` | `0`, `1` | `1` = show the mouse cursor in full screen. Not available in framebuffer mode |
 | `SPOTISCHERM_TOON_FPS` | `0` | `0`, `1` | `1` = show frames per second and milliseconds per frame in the top right |
+| `SPOTISCHERM_VERZOEKJES` | `1` | `0`, `1` | `1` = guests on your Wi-Fi can add songs to the queue via `http://spotischerm.local:8080/verzoekjes` (max 3 per guest per 15 min). Needs the web page (`SPOTISCHERM_WEB_POORT`) |
+| `SPOTISCHERM_UPDATES` | `1` | `0`, `1` | `1` = check GitHub every 6 hours for a new version, and allow updating from Settings → Update. `0` = never contact GitHub |
 | `SPOTISCHERM_WEB_POORT` | `8080` | a port number, or `0` | Port of the settings page for your phone (`http://spotischerm.local:8080`). `0` = off. Ports below 1024 don't work, the app doesn't run as root |
 
 ### Set by the service

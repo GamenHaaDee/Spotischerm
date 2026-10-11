@@ -1,0 +1,8 @@
+blank_issues_enabled: true
+contact_links:
+  - name: Troubleshooting guide
+    url: https://github.com/GamenHaaDee/Spotischerm/blob/main/TROUBLESHOOTING.md
+    about: Black screen, touch, Spotify errors and more, sorted by symptom
+  - name: All settings
+    url: https://github.com/GamenHaaDee/Spotischerm/blob/main/CONFIGURATION.md
+    about: Every setting in config.env, with its default and meaning

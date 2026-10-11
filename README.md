@@ -44,11 +44,18 @@ Raspberry Pi, from the very first Pi 1 up to the Pi 5.
   or grey clock, or goes completely black.
 - **Swipe:** on the main screen, swipe left for the next song and right for the previous one. On
   other screens, swipe right to go back.
+- **Artist and album pages:** tap the artist or album name on the main screen, or an artist or
+  album in the search results. You see their songs and albums, and play from there.
+- **Like:** tap the heart next to the title to add the song to your Liked Songs, or remove it.
 - **Long titles** scroll like a news ticker.
 - **Settings on the screen:** weather, idle screen, night mode, font (7 choices), colour (5 colours,
   or the colour of the album cover), language (English, Dutch, German, French, Spanish), screen rotation
   (landscape, portrait, upside down), an info page with IP address, Wi-Fi, temperature and
   version, and buttons to restart or shut down the Pi safely.
+- **Updates:** the app checks GitHub for new versions and tells you when one is out. Under
+  Settings → Update you install it with one tap; your settings and login stay as they are.
+- **Requests from guests:** guests scan a QR code on the Share page, search for a song on their
+  phone and add it to the queue (at most 3 per guest per 15 minutes).
 - **Settings from your phone:** the same settings on a web page, at `http://spotischerm.local:8080`.
   Under Settings → From your phone the screen shows a QR code with the address.
 - **Three screen shapes:** landscape, round (for example Waveshare 1080×1080) and portrait, each
@@ -273,6 +280,8 @@ SpotiScherm has no server of its own and collects nothing. The app only talks to
 | **Open-Meteo** (open-meteo.com) | The place name you enter, then its coordinates for the forecast | only if you set a weather location, every 15 minutes |
 | **LRCLIB** (lrclib.net) | Title, artist, album and length of the song that's playing | only when you open the lyrics |
 | **Your own network** | Looking for speakers over mDNS, and asking Spotify Connect devices for their name | while the app runs; this stays on your network |
+| **GitHub** (api.github.com) | Asking which version is the newest, and downloading it when you tap Update | every 6 hours; turn it off with `SPOTISCHERM_UPDATES=0` |
+| **Your own network** | The requests page (`/verzoekjes`): anyone on your Wi-Fi can search and add songs to the queue | while the app runs; turn it off with `SPOTISCHERM_VERZOEKJES=0` |
 | **Your own network** | The settings page on port 8080. Anyone on your Wi-Fi can open it; it shows and changes only the screen settings, never your Spotify keys or passwords | while the app runs; turn it off with `SPOTISCHERM_WEB_POORT=0` |
 
 Everything personal stays on the Pi: your Spotify keys (`config.env`), your login

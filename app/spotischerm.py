@@ -21,6 +21,7 @@ from i18n import LANGUAGES, month, set_language, tr, weekday
 from lyrics import LyricsCache
 from share import QrCache, spotify_link, wifi_payload
 from weather import Weather
+from updates import Updates
 from web import SettingsServer
 
 BG = (18, 18, 18)
@@ -32,7 +33,7 @@ MUTED = (160, 160, 160)
 CLOCK = (130, 130, 130)
 CLOCK_DIM = (95, 95, 95)
 ACCENT = (30, 215, 96)     # wordt per beeld gezet uit de instelling "kleur"
-APP_VERSION = "1.1"
+APP_VERSION = "1.2"
 TOAST = (80, 80, 80)
 
 BASE_W, BASE_H = 800, 480   # rechthoekig ontwerp
@@ -64,8 +65,11 @@ SLEEP_OPTIONS = (15, 30, 45, 60, 90, 120)
 DEVICES_REFRESH = 5        # apparatenlijst: elke zoveel seconden verversen
 IDLE_OPTIONS = (1, 2, 5, 10, 15, 30, 60, 0)   # minuten tot de klok; 0 = nooit
 NIGHT_STEP = 30            # nachttijden verschuiven per zoveel minuten
+LIKE_REFRESH = 60          # zo vaak (seconden) opnieuw vragen of het nummer geliket is
 INFO_REFRESH = 5           # info-pagina: zo vaak (seconden) IP, wifi en temperatuur opnieuw lezen
 SCROLLBAR_GUTTER = 30      # breedte van de strook rechts naast lange lijsten, voor de scrollbalk
+SPLASH_MIN = 1.5           # opstartscherm: minstens zo lang (s), ...
+SPLASH_MAX = 20            # ... en hoogstens zo lang als Spotify niet antwoordt
 SWIPE_MIN = 90             # zo ver (ontwerp-pixels) moet je opzij vegen voor een veeggebaar
 
 ACCENTS = (("groen", "Groen", (30, 215, 96)), ("blauw", "Blauw", (64, 156, 255)),
@@ -260,6 +264,7 @@ class Player:
         granted = granted_scopes()
         missing = set(SCOPES.split()) - granted
         self.can_recent = "user-read-recently-played" in granted
+        self.can_like = {"user-library-read", "user-library-modify"} <= granted
         self.sp = make_client(" ".join(sorted(granted)) if granted and missing else SCOPES)
         self.lock = threading.Lock()
         self.playback = None
@@ -272,6 +277,10 @@ class Player:
         self.queue_items = None
         self.search_results = None
         self.recent = None
+        self.liked = {}          # uri -> (geliket?, wanneer gevraagd)
+        self._like_busy = set()
+        self.artist_page = None  # {"artist", "tracks", "albums"} van de geopende artiest
+        self.album_page = None   # het geopende album, met al zijn nummers
         self.context_names = {}  # uri -> {naam, info}; {} als Spotify hem niet geeft
         self.last_ok = None
         self._search_for = None
@@ -397,6 +406,51 @@ class Player:
         self.hold()
         self._run(self.sp.volume, volume, device.get("id"))
 
+    # -- liken (Gelikete nummers) --
+
+    def liked_state(self, uri):
+        """True/False, of None zolang we het nog niet weten. Vraagt het af en toe opnieuw,
+        want je kunt een nummer ook op je telefoon liken."""
+        if not self.can_like or not uri:
+            return None
+        with self.lock:
+            state, asked = self.liked.get(uri, (None, 0.0))
+            if time.monotonic() - asked > LIKE_REFRESH and uri not in self._like_busy:
+                self._like_busy.add(uri)
+                self._run(self._check_liked, uri)
+        return state
+
+    def _check_liked(self, uri):
+        try:
+            state = bool(self.sp.current_user_saved_tracks_contains([uri])[0])
+            with self.lock:
+                self.liked[uri] = (state, time.monotonic())
+        finally:
+            with self.lock:
+                self._like_busy.discard(uri)
+
+    def toggle_like(self, uri):
+        if not self.can_like:
+            self.say(tr("Log één keer opnieuw in bij Spotify om nummers te liken: "
+                        ".venv/bin/python app/auth.py"), 8)
+            return
+        with self.lock:
+            state = not self.liked.get(uri, (False, 0.0))[0]
+            self.liked[uri] = (state, time.monotonic())  # meteen tonen, niet wachten op Spotify
+        self.say(tr("Toegevoegd aan Gelikete nummers") if state else tr("Verwijderd uit Gelikete nummers"), 2)
+        self._run(self._save_like, uri, state)
+
+    def _save_like(self, uri, state):
+        try:
+            if state:
+                self.sp.current_user_saved_tracks_add([uri])
+            else:
+                self.sp.current_user_saved_tracks_delete([uri])
+        except Exception:
+            with self.lock:
+                self.liked[uri] = (not state, time.monotonic())  # terugzetten
+            raise
+
     def toggle_shuffle(self):
         with self.lock:
             pb = self.playback
@@ -458,6 +512,50 @@ class Player:
                    + [("album", a) for a in pick("album", 3)] + [("playlist", p) for p in pick("playlist", 3)])
         if self._search_for == query:  # niet overschrijven als er intussen opnieuw gezocht is
             self.search_results = results
+
+    # -- artiest- en albumpagina --
+
+    def load_artist(self, artist_id):
+        self.artist_page = None
+        self._run(self._load_artist, artist_id)
+
+    def _load_artist(self, artist_id):
+        artist = self.sp.artist(artist_id)
+        # "Populairste nummers" geeft Spotify sinds feb. 2026 niet meer aan eigen apps; zoeken op de
+        # artiest geeft bijna hetzelfde, want de zoekresultaten staan op populariteit.
+        tracks, albums, seen = [], [], set()
+        try:
+            found = self.sp.search(f'artist:"{artist["name"]}"', limit=10, type="track")
+            tracks = [t for t in ((found.get("tracks") or {}).get("items") or [])
+                      if t and any(a.get("id") == artist_id for a in t.get("artists", []))]
+        except SpotifyException as err:  # liever een halve pagina dan eeuwig "Laden…"
+            print(f"Nummers van artiest: {err}", flush=True)
+        try:
+            page = self.sp.artist_albums(artist_id, album_type="album,single,compilation", limit=10)
+            while page and len(albums) < 60:
+                for album in page.get("items") or []:
+                    key = (album.get("name") or "").casefold()
+                    if album and key not in seen:  # dezelfde plaat in meerdere uitvoeringen maar één keer
+                        seen.add(key)
+                        albums.append(album)
+                page = self.sp.next(page) if page.get("next") else None
+        except SpotifyException as err:
+            print(f"Albums van artiest: {err}", flush=True)
+        self.artist_page = {"artist": artist, "tracks": tracks, "albums": albums}
+
+    def load_album(self, album_id):
+        self.album_page = None
+        self._run(self._load_album, album_id)
+
+    def _load_album(self, album_id):
+        album = self.sp.album(album_id)
+        page = album.get("tracks") or {}
+        tracks = list(page.get("items") or [])
+        while page.get("next") and len(tracks) < 300:
+            page = self.sp.next(page)
+            tracks += page.get("items") or []
+        album["all_tracks"] = [t for t in tracks if t]
+        self.album_page = album
 
     # -- lijsten --
 
@@ -568,6 +666,39 @@ class Player:
         self.sp.add_to_queue(item["uri"], device_id)
         self.say(tr("In de wachtrij: {name}", name=item["name"]))
 
+    # -- verzoekjes van gasten (via de webpagina, dus vanuit een andere thread) --
+
+    def search_tracks(self, query):
+        res = self.sp.search(query, limit=10, type="track")
+        out = []
+        for t in ((res.get("tracks") or {}).get("items") or []):
+            if not t:
+                continue
+            images = sorted((t.get("album") or {}).get("images") or [], key=lambda i: i.get("width") or 0)
+            out.append({"uri": t["uri"], "name": t["name"], "artist": describe(t)[1],
+                        "image": next((i["url"] for i in images if (i.get("width") or 0) >= 64),
+                                      images[-1]["url"] if images else "")})
+        return out
+
+    def guest_request(self, uri, name):
+        device_id = self._device().get("id")
+        if not device_id:
+            return False, tr("Er speelt nu niks. Vraag de gastheer of -vrouw om eerst muziek aan te zetten.")
+        try:
+            self.sp.add_to_queue(uri, device_id)
+        except SpotifyException as err:
+            return False, friendly_error(err)
+        self.say(tr("Verzoekje: {name}", name=name), 5)
+        return True, ""
+
+    def now_text(self):
+        pb, _ = self.snapshot()
+        item = (pb or {}).get("item")
+        if not item:
+            return None
+        title, subtitle, _ = describe(item)
+        return f"{title} · {subtitle}" if subtitle else title
+
     # -- slaaptimer --
 
     def sleep_left(self):
@@ -623,6 +754,7 @@ class Screen:
         self.preview = preview
         self.rotation = None
         self.started = time.monotonic()
+        self.booting = True      # opstartscherm tot Spotify voor het eerst antwoordt
         self._info, self._info_at = None, 0.0
         self.cover_accent = None
         self.p = None
@@ -659,6 +791,12 @@ class Screen:
         self.show_fps = os.environ.get("SPOTISCHERM_TOON_FPS") == "1"
         self.qr = QrCache()
         self.share_tab = 0
+        self.updates = None       # zie updates.py; None = uit
+        self.guest_requests = False  # verzoekjespagina aan?
+        self.update_confirm = False
+        self.page_back = {}
+        self.page_title = ""
+        self.artist_scroll = 0       # artiest/album: naar welk scherm "Terug" gaat
         self.web_port = None     # poort van de webpagina voor instellingen, None = uit
         self.power_confirm = None  # "reboot" of "poweroff" terwijl we om bevestiging vragen
         wifi_name = os.environ.get("GAST_WIFI_NAAM", "").strip()
@@ -905,6 +1043,16 @@ class Screen:
             dot = pygame.Rect(0, 0, s * 0.45, s * 0.45)
             dot.center = (x + s / 2 + gap, y + s / 2 + gap)
             pygame.draw.rect(self.s, color, dot)
+        elif kind in ("heart", "heart_full"):
+            # Hartvorm uit de bekende formule; vol en in de accentkleur als hij geliket is.
+            k = r * 0.034
+            pts = [(x + 16 * math.sin(t) ** 3 * k,
+                    y + r * 0.08 - (13 * math.cos(t) - 5 * math.cos(2 * t) - 2 * math.cos(3 * t) - math.cos(4 * t)) * k)
+                   for t in (i * math.pi / 30 for i in range(60))]
+            if kind == "heart_full":
+                pygame.draw.polygon(self.s, ACCENT, pts)
+            else:
+                pygame.draw.polygon(self.s, color, pts, lw)
         elif kind == "shuffle":
             a, b = r * 0.55, r * 0.38
             pygame.draw.line(self.s, color, (x - a, y + b), (x + a * 0.7, y - b), lw)
@@ -1073,6 +1221,16 @@ class Screen:
         self.update_art()
         choice = self.settings["kleur"]
         ACCENT = (self.cover_accent if choice == "hoes" else ACCENT_COLORS.get(choice)) or ACCENT_COLORS["groen"]
+        if self.booting:
+            elapsed = time.monotonic() - self.started
+            ready = self.p is not None and self.p.last_ok is not None
+            if (ready and elapsed >= SPLASH_MIN) or elapsed > SPLASH_MAX:
+                self.booting = False
+                self.last_touch = time.monotonic()  # het rustscherm telt vanaf nu
+            else:
+                self.draw_splash()
+                self.present()
+                return
         style = self.settings["nacht_stijl"]
         if self.is_dark():
             self.s.fill((0, 0, 0))
@@ -1101,7 +1259,8 @@ class Screen:
                      "set_weer": self.draw_set_weer, "set_rust": self.draw_set_rust,
                      "set_nacht": self.draw_set_nacht, "set_font": self.draw_set_font,
                      "set_taal": self.draw_set_taal, "set_kleur": self.draw_set_kleur,
-                     "set_scherm": self.draw_set_scherm, "info": self.draw_info, "set_power": self.draw_set_power, "set_web": self.draw_set_web,
+                     "set_scherm": self.draw_set_scherm, "info": self.draw_info, "set_power": self.draw_set_power, "set_web": self.draw_set_web, "set_update": self.draw_set_update, "artist": self.draw_artist,
+                     "album": self.draw_album,
                      "lyrics": self.draw_lyrics, "share": self.draw_share}
             now_view = {"rond": self.draw_now_round, "staand": self.draw_now_portrait}.get(self.shape, self.draw_now)
             views.get(self.view, now_view)()
@@ -1111,6 +1270,43 @@ class Screen:
             if dim > 0 and style in DIM_TINT:
                 self.tint(DIM_TINT[style], dim)
         self.present()
+
+    def draw_logo(self, cx, cy, size):
+        """Het SpotiScherm-logo: een schermpje met equalizer-balkjes die bewegen."""
+        w, h = self.px(size), self.px(size * 0.72)
+        frame = pygame.Rect(0, 0, w, h)
+        frame.center = self.pt(cx, cy)
+        pygame.draw.rect(self.s, TEXT, frame, max(2, int(w * 0.06)), border_radius=int(w * 0.14))
+        t = time.monotonic()
+        bars, inner = 5, w * 0.56
+        bar_w = inner / (bars * 1.55)
+        base_y = frame.centery + h * 0.24
+        for i in range(bars):
+            level = 0.3 + 0.7 * abs(math.sin(t * 2.6 + i * 1.3)) if not self.economy else (0.4, 0.8, 1, 0.65, 0.45)[i]
+            bh = h * 0.5 * level
+            x = frame.centerx - inner / 2 + i * bar_w * 1.55 + bar_w * 0.275
+            pygame.draw.rect(self.s, ACCENT, pygame.Rect(x, base_y - bh, bar_w, bh), border_radius=int(bar_w / 2))
+        if not self.economy:
+            self.animating = True
+
+    def draw_splash(self):
+        """Opstartscherm: logo, naam en wat er gebeurt."""
+        self.s.fill(BG)
+        top = 160 if self.compact else 150
+        self.draw_logo(self.cx, top, 150 if self.compact else 170)
+        # "Spoti" in wit en "Scherm" in de accentkleur, samen in het midden
+        left, right = self.rendered("Spoti", 40, TEXT, bold=True), self.rendered("Scherm", 40, ACCENT, bold=True)
+        x = self.pt(self.cx, 0)[0] - (left.get_width() + right.get_width()) // 2
+        y = self.pt(0, top + 112)[1]
+        self.s.blit(left, (x, y))
+        self.s.blit(right, (x + left.get_width(), y))
+        # De puntjes lopen op; de tekst zelf blijft op zijn plek staan.
+        status = tr("Verbinden met Spotify")
+        dots = "." * (int(time.monotonic() * 2) % 4)
+        sx = self.pt(self.cx, 0)[0] - self.font(18, False).size(status + "...")[0] // 2
+        self.text(status + dots, 18, MUTED, (sx, self.pt(0, top + 182)[1]), anchor="midleft")
+        self.text(f"v{APP_VERSION}", 14, CLOCK_DIM, self.pt(self.cx, top + 222), anchor="center")
+        self.animating = True
 
     def draw_message(self, title, lines):
         self.s.fill(BG)
@@ -1163,7 +1359,8 @@ class Screen:
         if left:
             self.text(tr("Slaaptimer {minutes} min", minutes=math.ceil(left / 60)), 15, ACCENT, self.pt(cx, 146), anchor="center")
         self.marquee(title, 28, TEXT, self.pt(cx, 186), anchor="center", max_w=self.px(330), bold=True)
-        self.marquee(subtitle, 20, MUTED, self.pt(cx, 222), anchor="center", max_w=self.px(320))
+        self.tap_line(self.marquee(subtitle, 20, MUTED, self.pt(cx, 222), anchor="center", max_w=self.px(320)),
+                      item, self.open_current_artist)
 
         repeat = (pb or {}).get("repeat_state", "off")
         self.round_button(cx - 150, 302, 22, "shuffle", self.p.toggle_shuffle,
@@ -1185,6 +1382,7 @@ class Screen:
                         set_volume, on_drag=set_volume)
 
         self.pill(self.rect(180, 404, 120, 36), tr("Menu"), self.open_menu, size=18)
+        self.like_button(item, cx - 92, 422, 20)
 
     def draw_now_portrait(self):
         """Staand scherm: de hoes groot bovenaan, bediening eronder."""
@@ -1214,8 +1412,10 @@ class Screen:
             self.text("♪", 140, MUTED, art_rect.center, anchor="center")
         self.lyrics_button(art_rect)
 
-        self.marquee(title, 28, TEXT, self.pt(cx, 368), anchor="center", max_w=self.px(440), bold=True)
-        self.marquee(subtitle, 20, MUTED, self.pt(cx, 402), anchor="center", max_w=self.px(440))
+        self.marquee(title, 28, TEXT, self.pt(cx, 368), anchor="center", max_w=self.px(350), bold=True)
+        self.tap_line(self.marquee(subtitle, 20, MUTED, self.pt(cx, 402), anchor="center", max_w=self.px(350)),
+                      item, self.open_current_artist)
+        self.like_button(item, 436, 385)
         if item:
             duration = item.get("duration_ms") or 1
             dragged = self.drag_value("seek")
@@ -1242,6 +1442,19 @@ class Screen:
             self.text(tr("Volume {volume}%", volume=volume), 15, MUTED, self.pt(cx, 566), anchor="center")
             set_volume = lambda f: self.p.set_volume(round(f * 100))
             self.slider("volume", self.rect(60, 590, 360, 8), volume / 100, TEXT, set_volume, on_drag=set_volume)
+
+    def tap_line(self, rect, item, action):
+        """Maakt een regel (artiest, album) aantikbaar; niet bij podcasts."""
+        if rect and (item or {}).get("type") == "track":
+            self.buttons.append((rect.inflate(self.px(8), self.px(14)), action))
+
+    def like_button(self, item, x, y, radius=22):
+        """Hartje om het nummer te liken; alleen bij echte nummers (niet bij podcasts of lokale bestanden)."""
+        uri = (item or {}).get("uri") or ""
+        if (item or {}).get("type") != "track" or not uri.startswith("spotify:track:"):
+            return
+        liked = self.p.liked_state(uri)
+        self.round_button(x, y, radius, "heart_full" if liked else "heart", lambda: self.p.toggle_like(uri))
 
     def lyrics_button(self, art_rect):
         """Tik op de hoes (of het knopje erop) voor de songtekst."""
@@ -1293,9 +1506,12 @@ class Screen:
         self.lyrics_button(art_rect)
 
         x0, cw = 440, 336
-        self.marquee(title, 30, TEXT, self.pt(x0, 84), max_w=self.px(cw), bold=True)
-        self.marquee(subtitle, 22, MUTED, self.pt(x0, 128), max_w=self.px(cw))
-        self.marquee(album, 18, MUTED, self.pt(x0, 162), max_w=self.px(cw))
+        self.marquee(title, 30, TEXT, self.pt(x0, 84), max_w=self.px(cw - 52), bold=True)
+        self.tap_line(self.marquee(subtitle, 22, MUTED, self.pt(x0, 128), max_w=self.px(cw - 52)),
+                      item, self.open_current_artist)
+        self.tap_line(self.marquee(album, 18, MUTED, self.pt(x0, 162), max_w=self.px(cw)), item,
+                      self.open_current_album)
+        self.like_button(item, x0 + cw - 20, 112)
 
         if item:
             duration = item.get("duration_ms") or 1
@@ -1466,6 +1682,38 @@ class Screen:
         self.draw_list(pl["name"], rows, empty, button=(tr("Speel alles"), self.play_playlist),
                        back=self.back_to_playlists)
 
+    def draw_artist(self):
+        page = self.p.artist_page
+        rows, title = None, self.page_title
+        if page is not None:
+            artist = page["artist"]
+            title = artist["name"]
+            pb, _ = self.p.snapshot()
+            playing_uri = ((pb or {}).get("item") or {}).get("uri")
+            rows = [(t["name"], tr("Nummer · {info}", info=track_info(t)), t.get("uri") == playing_uri,
+                     lambda t=t: self.pick_result("track", t), lambda t=t: self.p.add_to_queue(t))
+                    for t in page["tracks"]]
+            kinds = {"album": tr("Album"), "single": tr("Single"), "compilation": tr("Verzamelalbum")}
+            for album in page["albums"]:
+                year = (album.get("release_date") or "")[:4]
+                info = " · ".join(x for x in (kinds.get(album.get("album_type"), tr("Album")), year) if x)
+                rows.append((album["name"], info, False, lambda a=album: self.open_album(a["id"], a["name"])))
+        button = (tr("Speel"), lambda: self.pick_context(page["artist"]["uri"])) if page else None
+        self.draw_list(title, rows, tr("Niks gevonden."), button=button, back=self.page_return)
+
+    def draw_album(self):
+        album = self.p.album_page
+        rows, title = None, self.page_title
+        if album is not None:
+            title = album["name"]
+            pb, _ = self.p.snapshot()
+            playing_uri = ((pb or {}).get("item") or {}).get("uri")
+            rows = [(t["name"], track_info(t), t.get("uri") == playing_uri,
+                     lambda i=i: self.pick_album_track(i), lambda t=t: self.p.add_to_queue(t))
+                    for i, t in enumerate(album["all_tracks"])]
+        button = (tr("Speel alles"), lambda: self.pick_album_track(None)) if album else None
+        self.draw_list(title, rows, tr("Dit album is leeg."), button=button, back=self.page_return)
+
     def draw_queue(self):
         items = self.p.queue_items
         rows = None
@@ -1556,10 +1804,12 @@ class Screen:
                     rows.append((item["name"], tr("Nummer · {info}", info=track_info(item)), item.get("uri") == playing_uri,
                                  play, lambda item=item: self.p.add_to_queue(item)))
                 elif kind == "artist":
-                    rows.append((item["name"], tr("Artiest"), False, play))
+                    rows.append((item["name"], tr("Artiest"), False,
+                                 lambda item=item: self.open_artist(item["id"], item["name"])))
                 elif kind == "album":
                     artists = ", ".join(a["name"] for a in item.get("artists", []))
-                    rows.append((item["name"], tr("Album · {artists}", artists=artists), False, play))
+                    rows.append((item["name"], tr("Album · {artists}", artists=artists), False,
+                                 lambda item=item: self.open_album(item["id"], item["name"])))
                 else:
                     owner = (item.get("owner") or {}).get("display_name") or ""
                     rows.append((item["name"], tr("Playlist · {owner}", owner=owner) if owner else tr("Playlist"),
@@ -1590,6 +1840,7 @@ class Screen:
                 (tr("Scherm"), tr(dict(ROTATIONS)[s["draaien"]]), False, lambda: self.open_setting("set_scherm")),
                 (tr("Info"), self.system_info()[0][1], False, lambda: self.open_setting("info")),
                 (tr("Via je telefoon"), self.web_url() or tr("Uit"), False, lambda: self.open_setting("set_web")),
+                (tr("Bijwerken"), self.update_summary(), False, lambda: self.open_setting("set_update")),
                 (tr("Aan/uit"), tr("Herstarten of uitzetten"), False, lambda: self.open_setting("set_power"))]
         self.draw_list(tr("Instellingen"), rows, "")
 
@@ -1858,6 +2109,70 @@ class Screen:
         for i, (line, color) in enumerate(lines):
             self.paragraph(line, 22 if color == TEXT else 18, color, self.pt(575, 150 + i * 60), self.px(400))
 
+    # -- bijwerken (zie updates.py) --
+
+    def update_summary(self):
+        u = self.updates
+        if not u:
+            return tr("Versie {version}", version=APP_VERSION)
+        if u.available:
+            return tr("Versie {version} beschikbaar", version=u.latest["version"])
+        return tr("Versie {version} · nieuwste", version=APP_VERSION) if u.latest else tr("Versie {version}", version=APP_VERSION)
+
+    def draw_set_update(self):
+        self.setting_page("Bijwerken")
+        u = self.updates
+        if self.compact:
+            text_y, step, max_w, boxes, size = 130, 34, 330, ((140, 270, 200, 52), (140, 332, 200, 52)), 18
+        else:
+            text_y, step, max_w, boxes, size = 120, 40, 680, ((120, 330, 260, 72), (420, 330, 260, 72)), 22
+        lines = [(tr("Deze versie: {version}", version=APP_VERSION), TEXT)]
+        if not u:
+            lines.append((tr("Controleren staat uit (SPOTISCHERM_UPDATES=0)."), MUTED))
+        elif u.latest is None:
+            lines.append((tr("Kan GitHub niet bereiken.") if u.error else tr("Nog niet gecontroleerd…"), MUTED))
+        elif u.available:
+            lines.append((tr("Nieuw: {name}", name=u.latest["name"]), ACCENT))
+        else:
+            lines.append((tr("Je hebt de nieuwste versie."), MUTED))
+        if self.update_confirm:
+            lines.append((tr("Bijwerken en de app herstarten?"), TEXT))
+        for i, (line, color) in enumerate(lines):
+            self.paragraph(line, size, color, self.pt(self.cx, text_y + i * step), self.px(max_w))
+        if not u:
+            return
+        if self.update_confirm:
+            self.pill(self.rect(*boxes[0]), tr("Ja, bijwerken"), self.run_update, active=True, size=size)
+            self.pill(self.rect(*boxes[1]), tr("Annuleer"), lambda: setattr(self, "update_confirm", False), size=size)
+        else:
+            if u.available:
+                self.pill(self.rect(*boxes[0]), tr("Bijwerken"), lambda: setattr(self, "update_confirm", True),
+                          active=True, size=size)
+            self.pill(self.rect(*boxes[1]), tr("Nu controleren"), self.check_updates, size=size)
+
+    def check_updates(self):
+        self.updates.check_now()
+        self.p.say(tr("Bezig met controleren…"), 2)
+
+    def run_update(self):
+        self.update_confirm = False
+        version = self.updates.latest["version"]
+        self.draw_message(tr("Bijwerken naar {version}…", version=version), [tr("Even geduld, dit duurt een paar seconden.")])
+        try:
+            _, needs_install = self.updates.install()
+        except Exception as err:  # netwerk weg, schijf vol, rare zip...
+            print(f"Bijwerken mislukt: {err}", flush=True)
+            self.p.say(tr("Bijwerken mislukt. Probeer het later opnieuw."), 6)
+            return
+        if needs_install:
+            # Nieuwe pakketten nodig: dat moet met je wachtwoord, dus niet zelf herstarten.
+            self.p.say(tr("Bijgewerkt. Voer op de Pi nog één keer bash install.sh uit en herstart."), 12)
+            return
+        self.draw_message(tr("Bijgewerkt naar {version}", version=version), [tr("De app herstart…")])
+        if sys.platform.startswith("linux"):
+            subprocess.run(["sudo", "-n", "systemctl", "restart", "spotischerm"], capture_output=True, timeout=30)
+        self.p.say(tr("Herstart de app om de nieuwe versie te gebruiken."), 8)
+
     def draw_set_power(self):
         """Herstarten en uitzetten, met eerst een vraag of je het zeker weet."""
         self.setting_page("Aan/uit")
@@ -2029,14 +2344,14 @@ class Screen:
             above -= gap
 
     def share_items(self):
-        """Wat je kunt delen: (kop, regels eronder, tekst in de QR-code)."""
+        """Wat je kunt delen: (groep, kop, regels eronder, tekst in de QR-code)."""
         pb, _ = self.p.snapshot()
         item = (pb or {}).get("item")
         items = []
         if item and spotify_link(item.get("uri")):
             title, subtitle, _ = describe(item)
             kop = tr("Deze aflevering") if item.get("type") == "episode" else tr("Dit nummer")
-            items.append((kop, [title, subtitle], spotify_link(item["uri"])))
+            items.append(("muziek", kop, [title, subtitle], spotify_link(item["uri"])))
         uri = ((pb or {}).get("context") or {}).get("uri")
         if item and spotify_link(uri):
             kind = uri.split(":")[1]
@@ -2044,11 +2359,13 @@ class Screen:
                    "artist": tr("Deze artiest"), "show": tr("Deze podcast")}.get(kind, tr("Deze lijst"))
             info = self.p.context_name(uri)
             name = info.get("name", "") if info is not None else "…"
-            items.append((kop, [name], spotify_link(uri)))
+            items.append(("muziek", kop, [name], spotify_link(uri)))
         if self.wifi:
             name, password, security = self.wifi
             lines = [name, tr("Wachtwoord: {password}", password=password) if password else tr("Geen wachtwoord")]
-            items.append((tr("Wifi"), lines, wifi_payload(name, password, security)))
+            items.append(("gasten", tr("Wifi"), lines, wifi_payload(name, password, security)))
+        if self.guest_requests and self.web_url():
+            items.append(("gasten", tr("Verzoekjes"), [tr("Zoek en kies een nummer")], self.web_url() + "/verzoekjes"))
         return items
 
     def draw_share(self):
@@ -2065,36 +2382,42 @@ class Screen:
             self.paragraph(tr("Er speelt niks om te delen. Zet GAST_WIFI_NAAM in config.env "
                               "voor een QR-code van je gast-wifi."), 20, MUTED, self.pt(self.cx, 240), max_w)
             return
-        self.share_tab = min(self.share_tab, len(items) - 1)
-        if self.compact:
-            # (QR-maat, bovenkant, tekst, tabbladen y, breedte, hoogte, tekstbreedte)
-            size, top, text_y, tabs_y, tab_w, tab_h, text_w = {
-                "rond": (170, 84, 270, 342, 100, 40, 280),
-                "staand": (380, -40, 370, 470, 140, 56, 440)}[self.shape]
-            kop, lines, data = items[self.share_tab]
-            self.share_card(kop, lines, data, self.cx, top, size, text_y, text_w)
-            if len(items) > 1:
-                gap = 8
-                x0 = self.cx - (len(items) * tab_w + (len(items) - 1) * gap) // 2
-                for i, (kop, _, _) in enumerate(items):
-                    self.pill(self.rect(x0 + i * (tab_w + gap), tabs_y, tab_w, tab_h), kop,
-                              lambda i=i: setattr(self, "share_tab", i), active=i == self.share_tab, size=16)
-            return
-        size = {1: 300, 2: 280}.get(len(items), 220)
-        slot = 768 / len(items)
-        for i, (kop, lines, data) in enumerate(items):
-            self.share_card(kop, lines, data, int(16 + slot * (i + 0.5)), 72, size, 72 + size + 24, int(slot) - 24)
-        if not self.wifi:
+        # Twee tabbladen, Muziek en Gasten, met elk hoogstens twee codes naast elkaar.
+        groups = [(g, [it[1:] for it in items if it[0] == g]) for g in ("muziek", "gasten")]
+        groups = [(g, its) for g, its in groups if its]
+        self.share_tab = min(self.share_tab, len(groups) - 1)
+        group, shown = groups[self.share_tab]
+        # (QR-maat, bovenkant, tekst-y, afstand tussen de middens, tekstbreedte, letters, tabbladen-y, -breedte, -hoogte)
+        size, top, text_y, apart, text_w, fonts, tabs_y, tab_w, tab_h = {
+            "rechthoek": (250, 70, 342, 380, 360, (20, 16), 414, 180, 46),
+            "rond": (128, 84, 228, 150, 140, (15, 12), 340, 116, 40),
+            "staand": (200, -40, 186, 230, 210, (18, 14), 300, 160, 52)}[self.shape]
+        if len(shown) == 1:
+            size = int(size * 1.2)
+            text_y += int(size / 6)
+        for i, (kop, lines, data) in enumerate(shown):
+            cx = self.cx + int((i - (len(shown) - 1) / 2) * apart)
+            self.share_card(kop, lines, data, cx, top, size, text_y, text_w, fonts)
+        if len(groups) > 1:
+            labels = {"muziek": tr("Muziek"), "gasten": tr("Gasten")}
+            gap = 10
+            x0 = self.cx - (len(groups) * tab_w + gap) // 2
+            for i, (g, _) in enumerate(groups):
+                self.pill(self.rect(x0 + i * (tab_w + gap), tabs_y, tab_w, tab_h), labels[g],
+                          lambda i=i: setattr(self, "share_tab", i), active=i == self.share_tab, size=fonts[0])
+        elif not self.wifi and not self.compact:
             self.text(tr("Tip: zet GAST_WIFI_NAAM in config.env voor een QR-code van je gast-wifi."), 14,
                       CLOCK_DIM, self.pt(400, 474), anchor="midbottom", max_w=self.px(760))
 
-    def share_card(self, kop, lines, data, cx, top, size, text_y, max_w):
+    def share_card(self, kop, lines, data, cx, top, size, text_y, max_w, fonts=(20, 16)):
         """Een QR-code met eronder wat het is."""
+        big, small = fonts
         code = self.qr.get(data, self.px(size))
         self.s.blit(code, code.get_rect(midtop=self.pt(cx, top)))
-        self.text(kop, 20, TEXT, self.pt(cx, text_y), anchor="center", bold=True, max_w=self.px(max_w))
+        self.text(kop, big, TEXT, self.pt(cx, text_y), anchor="center", bold=True, max_w=self.px(max_w))
         for n, line in enumerate(x for x in lines if x):
-            self.text(line, 16, MUTED, self.pt(cx, text_y + 26 + n * 22), anchor="center", max_w=self.px(max_w))
+            self.text(line, small, MUTED, self.pt(cx, text_y + big + 6 + n * (small + 6)), anchor="center",
+                      max_w=self.px(max_w))
 
     def draw_toast(self):
         with self.p.lock:
@@ -2143,6 +2466,42 @@ class Screen:
             self.back()
         else:
             self.open_devices()
+
+    def open_artist(self, artist_id, name=""):
+        self.page_back["artist"] = self.view if self.view not in ("artist", "album") else "now"
+        self.page_title = name
+        self.p.load_artist(artist_id)
+        self.view, self.scroll = "artist", 0
+
+    def open_album(self, album_id, name=""):
+        # Vanaf een artiestpagina gaat Terug weer naar die artiest.
+        self.page_back["album"] = self.view if self.view != "album" else "now"
+        self.artist_scroll = self.scroll
+        self.page_title = name
+        self.p.load_album(album_id)
+        self.view, self.scroll = "album", 0
+
+    def page_return(self):
+        target = self.page_back.get(self.view, "now")
+        self.view, self.scroll = target, self.artist_scroll if target == "artist" else 0
+
+    def pick_album_track(self, position):
+        if self.p.play_context(self.p.album_page["uri"], position):
+            self.back()
+        else:
+            self.open_devices()
+
+    def open_current_artist(self):
+        pb, _ = self.p.snapshot()
+        artists = ((pb or {}).get("item") or {}).get("artists") or []
+        if artists and artists[0].get("id"):
+            self.open_artist(artists[0]["id"], artists[0].get("name", ""))
+
+    def open_current_album(self):
+        pb, _ = self.p.snapshot()
+        album = ((pb or {}).get("item") or {}).get("album") or {}
+        if album.get("id"):
+            self.open_album(album["id"], album.get("name", ""))
 
     def open_queue(self):
         self.p.load_queue()
@@ -2204,7 +2563,7 @@ class Screen:
         self.view, self.scroll = "settings", 0
 
     def open_setting(self, page):
-        self.view, self.power_confirm = page, None
+        self.view, self.power_confirm, self.update_confirm = page, None, False
 
     def apply_settings(self):
         s = self.settings
@@ -2289,7 +2648,7 @@ class Screen:
             return
         if not self.press or self.view in ("now", "menu", "timer", "keyboard",
                                               "set_weer", "set_rust", "set_nacht", "set_font", "set_taal",
-                                              "set_kleur", "set_scherm", "info", "share", "set_power", "set_web"):
+                                              "set_kleur", "set_scherm", "info", "share", "set_power", "set_web", "set_update"):
             return
         dy = pos[1] - self.press[0][1]
         if abs(dy) > self.px(12):
@@ -2417,6 +2776,8 @@ def main():
                 preview=os.environ.get("SPOTISCHERM_WINDOWED") == "1", local=LocalDevices(), economy=economy,
                 framebuffer=framebuffer)
 
+    ui.draw_splash()
+    ui.present()
     while not CACHE_PATH.exists():
         ui.draw_message(tr("Nog niet ingelogd bij Spotify"),
                         [tr("Log in via SSH op de Pi:"), "cd ~/spotify-scherm && .venv/bin/python app/auth.py"])
@@ -2427,8 +2788,18 @@ def main():
     ui.p = Player(small_art=economy)
     web = None
     port = int(os.environ.get("SPOTISCHERM_WEB_POORT", "8080").strip() or 0)
+    if os.environ.get("SPOTISCHERM_UPDATES", "1").strip() != "0":
+        ui.updates = Updates(APP_VERSION)
+    guests = None
+    if port and os.environ.get("SPOTISCHERM_VERZOEKJES", "1").strip() != "0":
+        class Guests:  # wat de verzoekjespagina mag: zoeken, in de wachtrij zetten, kijken wat er speelt
+            search = staticmethod(lambda query: ui.p.search_tracks(query))
+            add = staticmethod(lambda uri, name: ui.p.guest_request(uri, name))
+            now = staticmethod(lambda: ui.p.now_text())
+        guests = Guests()
+        ui.guest_requests = True
     if port:
-        web = SettingsServer(port, ui.web_describe, ui.web_validate)
+        web = SettingsServer(port, ui.web_describe, ui.web_validate, guests)
         web.start()
         ui.web_port = port
     touch_fps, calm_fps = ECONOMY_FPS if economy else (FPS, CALM_FPS)
@@ -2446,6 +2817,8 @@ def main():
             changed = True
         if changed:
             ui.p.say(tr("Instellingen aangepast via je telefoon"), 3)
+        if ui.updates and ui.updates.announce():
+            ui.p.say(tr("Versie {version} is uit: Instellingen → Bijwerken", version=ui.updates.latest["version"]), 8)
         for ev in pygame.event.get():
             if ev.type == pygame.QUIT:
                 return

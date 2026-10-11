@@ -46,11 +46,19 @@ Läuft auf einem Raspberry Pi, vom allerersten Pi 1 bis zum Pi 5.
   eine stark gedimmte rote oder graue Uhr oder wird ganz schwarz.
 - **Wischen:** Wische auf dem Hauptbildschirm nach links für den nächsten Titel und nach rechts
   für den vorherigen. Auf anderen Seiten wischst du nach rechts, um zurückzugehen.
+- **Künstler- und Albumseite:** Tippe auf den Namen des Künstlers oder Albums auf dem Hauptbildschirm
+  oder in den Suchergebnissen. Du siehst ihre Titel und Alben und spielst von dort ab.
+- **Liken:** Tippe auf das Herz neben dem Titel, um den Song zu deinen Lieblingssongs hinzuzufügen
+  oder wieder zu entfernen.
 - **Lange Titel** laufen wie ein Lauftext durch.
 - **Einstellungen am Bildschirm:** Wetter, Ruhebildschirm, Nachtmodus, Schriftart (7 zur Auswahl),
   Farbe (5 Farben oder die Farbe des Albumcovers), Sprache (Deutsch, Englisch, Niederländisch, Französisch, Spanisch),
   Bildschirm drehen (quer, hochkant, kopfüber), eine Info-Seite mit IP-Adresse, WLAN,
   Temperatur und Version, und Knöpfe, um den Pi sicher neu zu starten oder auszuschalten.
+- **Updates:** Die App prüft auf GitHub, ob es eine neue Version gibt, und meldet das. Unter
+  Einstellungen → Aktualisieren installierst du sie mit einem Tipp; Einstellungen und Anmeldung bleiben.
+- **Musikwünsche von Gästen:** Gäste scannen einen QR-Code auf der Teilen-Seite, suchen auf dem
+  Handy einen Song und fügen ihn zur Warteschlange hinzu (höchstens 3 pro Gast und Viertelstunde).
 - **Einstellungen per Handy:** dieselben Einstellungen auf einer Webseite, unter
   `http://spotischerm.local:8080`. Unter Einstellungen → Per Handy zeigt der Bildschirm einen QR-Code.
 - **Drei Bildschirmformen:** quer, rund (zum Beispiel Waveshare 1080×1080) und hochkant, jeweils mit
@@ -279,6 +287,8 @@ SpotiScherm hat keinen eigenen Server und sammelt nichts. Die App spricht nur mi
 | **Open-Meteo** (open-meteo.com) | Der Ortsname, den du einträgst, danach dessen Koordinaten für die Vorhersage | nur wenn du einen Wetterort einträgst, alle 15 Minuten |
 | **LRCLIB** (lrclib.net) | Titel, Künstler, Album und Länge des laufenden Titels | nur wenn du den Songtext öffnest |
 | **Dein eigenes Netzwerk** | Suche nach Lautsprechern per mDNS, und Spotify-Connect-Geräte nach ihrem Namen fragen | solange die App läuft; das bleibt in deinem Netzwerk |
+| **GitHub** (api.github.com) | Abfragen, welche Version die neueste ist, und sie herunterladen, wenn du auf Aktualisieren tippst | alle 6 Stunden; ausschalten mit `SPOTISCHERM_UPDATES=0` |
+| **Dein eigenes Netzwerk** | Die Wunschseite (`/verzoekjes`): Jeder in deinem WLAN kann suchen und Songs zur Warteschlange hinzufügen | solange die App läuft; ausschalten mit `SPOTISCHERM_VERZOEKJES=0` |
 | **Dein eigenes Netzwerk** | Die Einstellungsseite auf Port 8080. Jeder in deinem WLAN kann sie öffnen; sie zeigt und ändert nur die Bildschirmeinstellungen, nie deine Spotify-Schlüssel oder Passwörter | solange die App läuft; ausschalten mit `SPOTISCHERM_WEB_POORT=0` |
 
 Alles Persönliche bleibt auf dem Pi: deine Spotify-Schlüssel (`config.env`), deine Anmeldung
