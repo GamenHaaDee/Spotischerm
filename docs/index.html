@@ -1,0 +1,335 @@
+<!doctype html>
+<html lang="nl">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>SpotiScherm</title>
+<meta name="description" content="Een touchscreen aan de muur waarmee je Spotify bedient op al je speakers. Draait op een Raspberry Pi.">
+<meta property="og:title" content="SpotiScherm">
+<meta property="og:description" content="Een touchscreen aan de muur waarmee je Spotify bedient op al je speakers. Draait op een Raspberry Pi.">
+<meta property="og:image" content="screen-now.en.png">
+<link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Crect x='2' y='5' width='28' height='22' rx='5' fill='%23121212' stroke='%23f0f0f0' stroke-width='2.5'/%3E%3Crect x='9' y='14' width='3' height='8' rx='1.5' fill='%231ed760'/%3E%3Crect x='14.5' y='10' width='3' height='12' rx='1.5' fill='%231ed760'/%3E%3Crect x='20' y='12' width='3' height='10' rx='1.5' fill='%231ed760'/%3E%3C/svg%3E">
+<style>
+  :root {
+    --bg: #f6f6f4; --surface: #ffffff; --panel: #ececea; --text: #161616; --muted: #5d5d5a;
+    --accent: #12a150; --accent-ink: #ffffff; --line: #dcdcd8; --bezel: #1b1b1b; --shadow: 0 18px 50px rgba(0,0,0,.18);
+  }
+  @media (prefers-color-scheme: dark) {
+    :root:not([data-theme="light"]) {
+      --bg: #101010; --surface: #181818; --panel: #232323; --text: #f0f0f0; --muted: #a3a3a3;
+      --accent: #1ed760; --accent-ink: #0d0d0d; --line: #2c2c2c; --bezel: #050505; --shadow: 0 18px 50px rgba(0,0,0,.55);
+    }
+  }
+  :root[data-theme="dark"] {
+    --bg: #101010; --surface: #181818; --panel: #232323; --text: #f0f0f0; --muted: #a3a3a3;
+    --accent: #1ed760; --accent-ink: #0d0d0d; --line: #2c2c2c; --bezel: #050505; --shadow: 0 18px 50px rgba(0,0,0,.55);
+  }
+  * { box-sizing: border-box; }
+  html { -webkit-text-size-adjust: 100%; }
+  body { margin: 0; background: var(--bg); color: var(--text);
+         font: 17px/1.55 system-ui, -apple-system, "Segoe UI", Roboto, "DejaVu Sans", sans-serif; }
+  a { color: inherit; }
+  .wrap { max-width: 1040px; margin: 0 auto; padding: 0 20px; }
+
+  header.top { display: flex; align-items: center; justify-content: space-between; gap: 12px; padding: 18px 0; }
+  .brand { display: flex; align-items: center; gap: 10px; font-weight: 750; font-size: 20px; text-decoration: none; }
+  .brand b { color: var(--accent); font-weight: inherit; }
+  .langs { display: flex; gap: 4px; background: var(--panel); padding: 4px; border-radius: 999px; }
+  .langs button { border: 0; background: none; color: var(--muted); font: inherit; font-size: 14px; font-weight: 600;
+                  padding: 6px 12px; border-radius: 999px; cursor: pointer; }
+  .langs button[aria-pressed="true"] { background: var(--surface); color: var(--text); }
+  .langs button:focus-visible, .tabs button:focus-visible, .nav:focus-visible, .btn:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+
+  .hero { padding: 28px 0 8px; display: grid; gap: 14px; }
+  .hero h1 { font-size: clamp(32px, 5.4vw, 54px); line-height: 1.08; margin: 0; letter-spacing: -.02em; max-width: 17ch; }
+  .hero p { margin: 0; color: var(--muted); font-size: clamp(17px, 2vw, 20px); max-width: 60ch; }
+  .cta { display: flex; flex-wrap: wrap; gap: 10px; margin-top: 8px; }
+  .btn { display: inline-flex; align-items: center; gap: 8px; padding: 12px 20px; border-radius: 999px; font-weight: 650;
+         text-decoration: none; border: 1px solid var(--line); background: var(--surface); }
+  .btn.primary { background: var(--accent); color: var(--accent-ink); border-color: transparent; }
+
+  /* het scherm */
+  .demo { margin: 34px 0 10px; display: grid; justify-items: center; gap: 18px; }
+  .stage { width: 100%; display: flex; align-items: center; justify-content: center; gap: 12px; }
+  .device { background: var(--bezel); padding: 14px; border-radius: 22px; box-shadow: var(--shadow);
+            width: min(100%, 760px); touch-action: pan-y; }
+  .device img { display: block; width: 100%; height: auto; border-radius: 6px; background: #121212; user-select: none; -webkit-user-drag: none; }
+  .device.round { width: min(100%, 470px); border-radius: 50%; padding: 18px; }
+  .device.round img { border-radius: 50%; }
+  .device.portrait { width: min(62%, 300px); }
+  .nav { flex: none; width: 44px; height: 44px; border-radius: 50%; border: 1px solid var(--line); background: var(--surface);
+         color: var(--text); font-size: 22px; line-height: 1; cursor: pointer; display: grid; place-items: center; }
+  .tabs { display: flex; flex-wrap: wrap; justify-content: center; gap: 6px; max-width: 760px; }
+  .tabs button { border: 1px solid var(--line); background: var(--surface); color: var(--muted); font: inherit; font-size: 14px;
+                 font-weight: 600; padding: 7px 13px; border-radius: 999px; cursor: pointer; }
+  .tabs button[aria-selected="true"] { background: var(--accent); color: var(--accent-ink); border-color: transparent; }
+  .caption { text-align: center; color: var(--muted); max-width: 56ch; min-height: 3.2em; margin: 0; }
+  .caption strong { color: var(--text); }
+
+  section { padding: 40px 0 8px; }
+  h2 { font-size: clamp(24px, 3vw, 30px); margin: 0 0 18px; letter-spacing: -.01em; }
+  .features { display: grid; grid-template-columns: repeat(auto-fill, minmax(230px, 1fr)); gap: 12px; padding: 0; margin: 0; list-style: none; }
+  .features li { background: var(--surface); border: 1px solid var(--line); border-radius: 14px; padding: 14px 16px; }
+  .features b { display: block; margin-bottom: 2px; }
+  .features span { color: var(--muted); font-size: 15px; }
+  .how { display: grid; grid-template-columns: repeat(auto-fit, minmax(260px, 1fr)); gap: 12px; }
+  .how > div { background: var(--surface); border: 1px solid var(--line); border-radius: 14px; padding: 16px 18px; }
+  .how h3 { margin: 0 0 6px; font-size: 18px; }
+  .how p, .how ul { margin: 0; color: var(--muted); font-size: 15.5px; }
+  .how ul { padding-left: 18px; }
+  footer { padding: 40px 0 50px; color: var(--muted); font-size: 14.5px; display: flex; flex-wrap: wrap; gap: 6px 18px; }
+  @media (max-width: 560px) {
+    .nav { display: none; }
+    .device { padding: 8px; border-radius: 14px; }
+    .device.round { padding: 10px; }
+  }
+</style>
+</head>
+<body>
+<div class="wrap">
+  <header class="top">
+    <a class="brand" href="https://github.com/GamenHaaDee/Spotischerm" aria-label="SpotiScherm op GitHub">
+      <svg width="34" height="26" viewBox="0 0 34 26" aria-hidden="true"><rect x="1.5" y="1.5" width="31" height="23" rx="6" fill="none" stroke="currentColor" stroke-width="3"/><rect x="9" y="11" width="3.4" height="8" rx="1.7" fill="var(--accent)"/><rect x="15.3" y="7" width="3.4" height="12" rx="1.7" fill="var(--accent)"/><rect x="21.6" y="9" width="3.4" height="10" rx="1.7" fill="var(--accent)"/></svg>
+      <span>Spoti<b>Scherm</b></span>
+    </a>
+    <nav class="langs" aria-label="Taal / Language / Sprache">
+      <button type="button" data-lang="nl">NL</button>
+      <button type="button" data-lang="en">EN</button>
+      <button type="button" data-lang="de">DE</button>
+    </nav>
+  </header>
+
+  <div class="hero">
+    <h1 data-t="title"></h1>
+    <p data-t="intro"></p>
+    <div class="cta">
+      <a class="btn primary" id="install" href="#"><span data-t="install"></span> →</a>
+      <a class="btn" href="https://github.com/GamenHaaDee/Spotischerm">GitHub</a>
+      <a class="btn" href="https://github.com/GamenHaaDee/Spotischerm/releases/latest" data-t="download"></a>
+    </div>
+  </div>
+
+  <div class="demo">
+    <div class="stage">
+      <button class="nav" id="prev" type="button" aria-label="Vorige">‹</button>
+      <div class="device" id="device"><img id="shot" src="screen-now.en.png" alt="SpotiScherm" width="800" height="480"></div>
+      <button class="nav" id="next" type="button" aria-label="Volgende">›</button>
+    </div>
+    <div class="tabs" role="tablist" id="tabs"></div>
+    <p class="caption" id="caption" aria-live="polite"></p>
+  </div>
+
+  <section>
+    <h2 data-t="featuresTitle"></h2>
+    <ul class="features" id="features"></ul>
+  </section>
+
+  <section>
+    <h2 data-t="howTitle"></h2>
+    <div class="how" id="how"></div>
+  </section>
+
+  <footer>
+    <span data-t="footer"></span>
+    <a href="https://github.com/GamenHaaDee/Spotischerm/blob/main/LICENSE">MIT</a>
+    <a href="https://github.com/GamenHaaDee/Spotischerm/issues" data-t="issues"></a>
+  </footer>
+</div>
+
+<script>
+const REPO = "https://github.com/GamenHaaDee/Spotischerm";
+const SCREENS = [
+  { file: "now", shape: "" }, { file: "devices", shape: "" }, { file: "lyrics", shape: "" },
+  { file: "cover", shape: "" }, { file: "clock", shape: "" }, { file: "settings", shape: "" },
+  { file: "round", shape: "round" }, { file: "portrait", shape: "portrait" },
+];
+const T = {
+  nl: {
+    title: "Spotify bedienen vanaf je muur.",
+    intro: "Een touchscreen met een Raspberry Pi dat de muziek naar elke speaker in huis stuurt: Sonos, tv, slimme speakers of je pc. Met songteksten, een klok en weer als er niets speelt, en een nachtmodus.",
+    install: "Installeren", download: "Download", readme: "README.nl.md#installatie",
+    prev: "Vorige", next: "Volgende",
+    screens: [
+      ["Nu speelt", "Hoes, titel, voortgang en volume. Veeg naar links of rechts voor het volgende of vorige nummer, en tik op het hartje om te liken."],
+      ["Apparaten", "Zet de muziek over naar een andere speaker, tv, pc of telefoon. Ook Google Cast-speakers in je netwerk staan erin."],
+      ["Songtekst", "Tik op de hoes: de tekst loopt mee met het nummer, met de huidige regel groot in het midden."],
+      ["Rustscherm", "Raak je het scherm even niet aan, dan staat de hoes groot in beeld met de tijd erbij."],
+      ["Klok", "Speelt er niets, dan zie je een klok met het weer en de regenverwachting."],
+      ["Instellingen", "Weer, rustscherm, nachtmodus, lettertype, kleur, taal en meer. Ook te regelen via je telefoon."],
+      ["Rond", "Een eigen indeling voor ronde schermen, zoals het Waveshare 1080×1080."],
+      ["Staand", "Hang je het scherm staand op, dan past alles zich daarop aan."],
+    ],
+    featuresTitle: "Wat het kan",
+    features: [
+      ["Alle speakers", "Spotify Connect: Sonos, tv, pc, telefoon en meer."],
+      ["Zoeken en playlists", "Met een schermtoetsenbord; wachtrij en recent gespeeld erbij."],
+      ["Meelopende songteksten", "Via LRCLIB, de huidige regel groot in beeld."],
+      ["Klok, weer en nachtmodus", "'s Avonds langzaam donkerder, 's nachts een gedimde klok of zwart."],
+      ["Verzoekjes van gasten", "Gasten scannen een QR-code en kiezen een nummer op hun telefoon."],
+      ["Delen", "QR-codes voor het nummer, de playlist en je gast-wifi."],
+      ["Slaaptimer", "De muziek stopt vanzelf en wordt aan het eind zachter."],
+      ["Via je telefoon", "Dezelfde instellingen op een webpagina, en een schermafdruk maken."],
+      ["Updates met één tik", "De app kijkt zelf of er een nieuwe versie is."],
+      ["5 talen", "Nederlands, English, Deutsch, Français en Español."],
+      ["Volumeknop en sensor", "Optioneel: een draaiknop en een bewegingssensor op de GPIO."],
+      ["3D-print behuizing", "Een OpenSCAD-ontwerp voor aan de muur."],
+    ],
+    howTitle: "Hoe het werkt",
+    how: [
+      ["Een afstandsbediening", "<p>De Pi speelt zelf geen muziek af. Hij zegt via de Spotify Web API: “speel dit af op die speaker”. Het geluid gaat rechtstreeks van Spotify naar die speaker.</p>"],
+      ["Wat je nodig hebt", "<ul><li>Een Raspberry Pi (3B+ of nieuwer aanbevolen; de Pi 1 kan ook)</li><li>Een HDMI-touchscreen, bijv. 7″ 1024×600</li><li>Spotify Premium</li><li>Een gratis Spotify-ontwikkelaarsapp (Client ID)</li></ul>"],
+      ["Installeren", "<p>Eén script installeert alles en zet de app aan bij het opstarten. Daarna log je één keer in bij Spotify. De stappen staan in de README.</p>"],
+    ],
+    footer: "SpotiScherm is een hobbyproject en hoort niet bij Spotify.", issues: "Een probleem melden",
+  },
+  en: {
+    title: "Control Spotify from your wall.",
+    intro: "A Raspberry Pi touchscreen that sends your music to any speaker in the house: Sonos, TV, smart speakers or your PC. With lyrics, a clock and weather when nothing plays, and a night mode.",
+    install: "Install", download: "Download", readme: "README.md#installation",
+    prev: "Previous", next: "Next",
+    screens: [
+      ["Now playing", "Cover, title, progress and volume. Swipe left or right for the next or previous song, and tap the heart to like it."],
+      ["Devices", "Move the music to another speaker, TV, PC or phone. Google Cast speakers on your network show up too."],
+      ["Lyrics", "Tap the cover: the lyrics follow the song, with the current line large in the middle."],
+      ["Idle screen", "When you don't touch the screen for a while, the cover fills the screen with the time next to it."],
+      ["Clock", "When nothing plays, you see a clock with the weather and the chance of rain."],
+      ["Settings", "Weather, idle screen, night mode, font, colour, language and more. Also from your phone."],
+      ["Round", "A layout of its own for round screens, like the Waveshare 1080×1080."],
+      ["Portrait", "Hang the screen upright and everything adapts."],
+    ],
+    featuresTitle: "Features",
+    features: [
+      ["Every speaker", "Spotify Connect: Sonos, TV, PC, phone and more."],
+      ["Search and playlists", "With an on-screen keyboard; queue and recently played too."],
+      ["Synced lyrics", "From LRCLIB, with the current line large on screen."],
+      ["Clock, weather and night mode", "Slowly dims in the evening; a dimmed clock or black at night."],
+      ["Guest requests", "Guests scan a QR code and pick a song on their phone."],
+      ["Sharing", "QR codes for the song, the playlist and your guest Wi-Fi."],
+      ["Sleep timer", "The music stops by itself and fades out at the end."],
+      ["From your phone", "The same settings on a web page, plus a screenshot button."],
+      ["One-tap updates", "The app checks for new versions by itself."],
+      ["5 languages", "Nederlands, English, Deutsch, Français and Español."],
+      ["Volume knob and sensor", "Optional: a rotary knob and a motion sensor on the GPIO."],
+      ["3D-printed case", "An OpenSCAD design for on the wall."],
+    ],
+    howTitle: "How it works",
+    how: [
+      ["A remote control", "<p>The Pi plays no music itself. Through the Spotify Web API it says “play this on that speaker”. The sound goes straight from Spotify to that speaker.</p>"],
+      ["What you need", "<ul><li>A Raspberry Pi (3B+ or newer recommended; a Pi 1 works too)</li><li>An HDMI touchscreen, e.g. 7″ 1024×600</li><li>Spotify Premium</li><li>A free Spotify developer app (Client ID)</li></ul>"],
+      ["Installing", "<p>One script installs everything and starts the app at boot. Then you log in to Spotify once. The steps are in the README.</p>"],
+    ],
+    footer: "SpotiScherm is a hobby project and not affiliated with Spotify.", issues: "Report a problem",
+  },
+  de: {
+    title: "Spotify von der Wand aus steuern.",
+    intro: "Ein Touchscreen mit Raspberry Pi, der deine Musik an jeden Lautsprecher im Haus schickt: Sonos, Fernseher, smarte Lautsprecher oder deinen PC. Mit Songtexten, Uhr und Wetter, wenn nichts läuft, und einem Nachtmodus.",
+    install: "Installieren", download: "Download", readme: "README.de.md#installation",
+    prev: "Zurück", next: "Weiter",
+    screens: [
+      ["Läuft gerade", "Cover, Titel, Fortschritt und Lautstärke. Wische nach links oder rechts für den nächsten oder vorherigen Titel, und tippe auf das Herz zum Liken."],
+      ["Geräte", "Schicke die Musik an einen anderen Lautsprecher, Fernseher, PC oder ein Handy. Auch Google-Cast-Lautsprecher im Netzwerk erscheinen."],
+      ["Songtext", "Tippe auf das Cover: Der Text läuft mit, die aktuelle Zeile groß in der Mitte."],
+      ["Ruhebildschirm", "Berührst du den Bildschirm eine Weile nicht, erscheint das Cover groß mit der Uhrzeit."],
+      ["Uhr", "Läuft nichts, siehst du eine Uhr mit Wetter und Regenwahrscheinlichkeit."],
+      ["Einstellungen", "Wetter, Ruhebildschirm, Nachtmodus, Schrift, Farbe, Sprache und mehr. Auch vom Handy aus."],
+      ["Rund", "Ein eigenes Layout für runde Bildschirme wie den Waveshare 1080×1080."],
+      ["Hochkant", "Hängst du den Bildschirm hochkant auf, passt sich alles an."],
+    ],
+    featuresTitle: "Was es kann",
+    features: [
+      ["Alle Lautsprecher", "Spotify Connect: Sonos, Fernseher, PC, Handy und mehr."],
+      ["Suche und Playlists", "Mit Bildschirmtastatur; dazu Warteschlange und zuletzt gehört."],
+      ["Mitlaufende Songtexte", "Von LRCLIB, die aktuelle Zeile groß im Bild."],
+      ["Uhr, Wetter und Nachtmodus", "Abends langsam dunkler, nachts eine gedimmte Uhr oder schwarz."],
+      ["Musikwünsche von Gästen", "Gäste scannen einen QR-Code und wählen einen Titel am Handy."],
+      ["Teilen", "QR-Codes für Titel, Playlist und dein Gast-WLAN."],
+      ["Sleep-Timer", "Die Musik stoppt von selbst und wird am Ende leiser."],
+      ["Vom Handy aus", "Dieselben Einstellungen auf einer Webseite, dazu ein Screenshot-Knopf."],
+      ["Updates mit einem Tipp", "Die App prüft selbst, ob es eine neue Version gibt."],
+      ["5 Sprachen", "Nederlands, English, Deutsch, Français und Español."],
+      ["Lautstärkeregler und Sensor", "Optional: ein Drehregler und ein Bewegungsmelder am GPIO."],
+      ["3D-Druck-Gehäuse", "Ein OpenSCAD-Entwurf für die Wand."],
+    ],
+    howTitle: "So funktioniert es",
+    how: [
+      ["Eine Fernbedienung", "<p>Der Pi spielt selbst keine Musik ab. Über die Spotify Web API sagt er: „Spiel das auf jenem Lautsprecher.“ Der Ton geht direkt von Spotify zum Lautsprecher.</p>"],
+      ["Was du brauchst", "<ul><li>Einen Raspberry Pi (3B+ oder neuer empfohlen; ein Pi 1 geht auch)</li><li>Einen HDMI-Touchscreen, z. B. 7″ 1024×600</li><li>Spotify Premium</li><li>Eine kostenlose Spotify-Entwickler-App (Client ID)</li></ul>"],
+      ["Installieren", "<p>Ein Skript installiert alles und startet die App beim Booten. Danach meldest du dich einmal bei Spotify an. Die Schritte stehen in der README.</p>"],
+    ],
+    footer: "SpotiScherm ist ein Hobbyprojekt und gehört nicht zu Spotify.", issues: "Problem melden",
+  },
+};
+
+let lang = "nl", index = 0;
+const $ = (id) => document.getElementById(id);
+
+function pickLanguage() {
+  try { const saved = localStorage.getItem("spotischerm-lang"); if (T[saved]) return saved; } catch (e) {}
+  const nav = (navigator.language || "en").slice(0, 2);
+  return T[nav] ? nav : "en";
+}
+
+function show(i) {
+  index = (i + SCREENS.length) % SCREENS.length;
+  const s = SCREENS[index], [name, text] = T[lang].screens[index];
+  const img = $("shot");
+  img.src = `screen-${s.file}.${lang}.png`;
+  img.alt = `${name}: ${text}`;
+  $("device").className = "device" + (s.shape ? " " + s.shape : "");
+  $("caption").innerHTML = `<strong>${name}.</strong> ${text}`;
+  [...$("tabs").children].forEach((b, n) => {
+    b.setAttribute("aria-selected", n === index ? "true" : "false");
+    b.tabIndex = n === index ? 0 : -1;
+  });
+}
+
+function render() {
+  const t = T[lang];
+  document.documentElement.lang = lang;
+  document.querySelectorAll("[data-t]").forEach((el) => { el.textContent = t[el.dataset.t]; });
+  $("install").href = `${REPO}/blob/main/${t.readme}`;
+  $("prev").setAttribute("aria-label", t.prev);
+  $("next").setAttribute("aria-label", t.next);
+  document.querySelectorAll(".langs button").forEach((b) => b.setAttribute("aria-pressed", b.dataset.lang === lang));
+  $("tabs").innerHTML = "";
+  t.screens.forEach(([name], n) => {
+    const b = document.createElement("button");
+    b.type = "button"; b.role = "tab"; b.textContent = name;
+    b.addEventListener("click", () => show(n));
+    $("tabs").appendChild(b);
+  });
+  $("features").innerHTML = t.features.map(([h, p]) => `<li><b>${h}</b><span>${p}</span></li>`).join("");
+  $("how").innerHTML = t.how.map(([h, body]) => `<div><h3>${h}</h3>${body}</div>`).join("");
+  show(index);
+  // volgende plaatjes alvast laden, zodat wisselen direct gaat
+  SCREENS.forEach((s) => { const pre = new Image(); pre.src = `screen-${s.file}.${lang}.png`; });
+}
+
+document.querySelectorAll(".langs button").forEach((b) => b.addEventListener("click", () => {
+  lang = b.dataset.lang;
+  try { localStorage.setItem("spotischerm-lang", lang); } catch (e) {}
+  render();
+}));
+$("prev").addEventListener("click", () => show(index - 1));
+$("next").addEventListener("click", () => show(index + 1));
+$("tabs").addEventListener("keydown", (e) => {
+  if (e.key === "ArrowRight" || e.key === "ArrowLeft") {
+    show(index + (e.key === "ArrowRight" ? 1 : -1));
+    $("tabs").children[index].focus();
+    e.preventDefault();
+  }
+});
+// vegen over het scherm, net als op de echte SpotiScherm
+let startX = null;
+$("device").addEventListener("pointerdown", (e) => { startX = e.clientX; });
+$("device").addEventListener("pointerup", (e) => {
+  if (startX === null) return;
+  const dx = e.clientX - startX; startX = null;
+  if (Math.abs(dx) > 40) show(index + (dx < 0 ? 1 : -1));
+});
+
+lang = pickLanguage();
+render();
+</script>
+</body>
+</html>
