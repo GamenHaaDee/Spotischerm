@@ -12,6 +12,7 @@ instellingen.tmp
 # --- Python ---
 .venv/
 venv/
+.demo-venv/
 __pycache__/
 *.py[cod]
 

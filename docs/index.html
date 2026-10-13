@@ -66,6 +66,12 @@
   .caption { text-align: center; color: var(--muted); max-width: 56ch; min-height: 3.2em; margin: 0; }
   .caption strong { color: var(--text); }
 
+  .live { display: grid; justify-items: center; gap: 12px; }
+  .live .device { aspect-ratio: 5 / 3; display: grid; place-items: center; }
+  .live .device > div { display: grid; justify-items: center; gap: 10px; text-align: center; padding: 16px; }
+  .live .device span { color: #a3a3a3; font-size: 14.5px; max-width: 46ch; }
+  .live iframe { width: 100%; height: 100%; border: 0; border-radius: 6px; background: #121212; display: block; }
+  .live .note { color: var(--muted); font-size: 14.5px; text-align: center; max-width: 64ch; margin: 0; }
   section { padding: 40px 0 8px; }
   h2 { font-size: clamp(24px, 3vw, 30px); margin: 0 0 18px; letter-spacing: -.01em; }
   .features { display: grid; grid-template-columns: repeat(auto-fill, minmax(230px, 1fr)); gap: 12px; padding: 0; margin: 0; list-style: none; }
@@ -119,6 +125,19 @@
     <p class="caption" id="caption" aria-live="polite"></p>
   </div>
 
+  <section id="probeer">
+    <h2 data-t="tryTitle"></h2>
+    <div class="live">
+      <div class="device" id="live">
+        <div>
+          <button class="btn primary" type="button" id="start" data-t="tryButton"></button>
+          <span data-t="tryHint"></span>
+        </div>
+      </div>
+      <p class="note"><span data-t="tryNote"></span> <a href="demo/" id="full" target="_blank" rel="noopener" data-t="tryFull"></a></p>
+    </div>
+  </section>
+
   <section>
     <h2 data-t="featuresTitle"></h2>
     <ul class="features" id="features"></ul>
@@ -159,6 +178,11 @@ const T = {
       ["Rond", "Een eigen indeling voor ronde schermen, zoals het Waveshare 1080×1080."],
       ["Staand", "Hang je het scherm staand op, dan past alles zich daarop aan."],
     ],
+    tryTitle: "Probeer het zelf",
+    tryButton: "▶ Start de demo",
+    tryHint: "De echte app, in je browser. Met verzonnen muziek: er gaat niets naar Spotify.",
+    tryNote: "De demo laadt ongeveer 5 MB (Python en pygame via pygame-web.github.io). Tik, veeg en scroll zoals op het scherm.",
+    tryFull: "Op volledig scherm openen",
     featuresTitle: "Wat het kan",
     features: [
       ["Alle speakers", "Spotify Connect: Sonos, tv, pc, telefoon en meer."],
@@ -197,6 +221,11 @@ const T = {
       ["Round", "A layout of its own for round screens, like the Waveshare 1080×1080."],
       ["Portrait", "Hang the screen upright and everything adapts."],
     ],
+    tryTitle: "Try it yourself",
+    tryButton: "▶ Start the demo",
+    tryHint: "The real app, in your browser. With made-up music: nothing goes to Spotify.",
+    tryNote: "The demo loads about 5 MB (Python and pygame via pygame-web.github.io). Tap, swipe and scroll as on the screen.",
+    tryFull: "Open full screen",
     featuresTitle: "Features",
     features: [
       ["Every speaker", "Spotify Connect: Sonos, TV, PC, phone and more."],
@@ -235,6 +264,11 @@ const T = {
       ["Rund", "Ein eigenes Layout für runde Bildschirme wie den Waveshare 1080×1080."],
       ["Hochkant", "Hängst du den Bildschirm hochkant auf, passt sich alles an."],
     ],
+    tryTitle: "Probier es selbst",
+    tryButton: "▶ Demo starten",
+    tryHint: "Die echte App, im Browser. Mit erfundener Musik: nichts geht an Spotify.",
+    tryNote: "Die Demo lädt etwa 5 MB (Python und pygame über pygame-web.github.io). Tippe, wische und scrolle wie auf dem Bildschirm.",
+    tryFull: "Im Vollbild öffnen",
     featuresTitle: "Was es kann",
     features: [
       ["Alle Lautsprecher", "Spotify Connect: Sonos, Fernseher, PC, Handy und mehr."],
@@ -288,6 +322,7 @@ function render() {
   document.documentElement.lang = lang;
   document.querySelectorAll("[data-t]").forEach((el) => { el.textContent = t[el.dataset.t]; });
   $("install").href = `${REPO}/blob/main/${t.readme}`;
+  $("full").href = `demo/?lang=${lang}`;
   $("prev").setAttribute("aria-label", t.prev);
   $("next").setAttribute("aria-label", t.next);
   document.querySelectorAll(".langs button").forEach((b) => b.setAttribute("aria-pressed", b.dataset.lang === lang));
@@ -310,6 +345,14 @@ document.querySelectorAll(".langs button").forEach((b) => b.addEventListener("cl
   try { localStorage.setItem("spotischerm-lang", lang); } catch (e) {}
   render();
 }));
+$("start").addEventListener("click", () => {
+  const frame = document.createElement("iframe");
+  frame.src = `demo/?lang=${lang}`;
+  frame.title = "SpotiScherm demo";
+  frame.allow = "fullscreen";
+  $("live").replaceChildren(frame);
+  frame.focus();
+});
 $("prev").addEventListener("click", () => show(index - 1));
 $("next").addEventListener("click", () => show(index + 1));
 $("tabs").addEventListener("keydown", (e) => {
