@@ -99,7 +99,7 @@ class RequestCounter:
     """
 
     def __init__(self, path):
-        self.path, self.lock, self.saved = path, threading.Lock(), 0.0
+        self.path, self.lock, self.saved = path, threading.Lock(), float("-inf")  # nog nooit bewaard
         try:
             data = json.loads(path.read_text(encoding="utf-8"))
         except (OSError, ValueError):

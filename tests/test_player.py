@@ -193,3 +193,12 @@ def test_top_is_fetched_once_and_kept(player):
     player.load_top("tracks", "long_term")
     player.work()
     assert len(player.top_items("tracks", "long_term")) == 16
+
+
+def test_likes_work_right_after_a_reboot(player, monkeypatch):
+    """monotonic() telt vanaf het opstarten; vlak na een herstart is dat nog klein (GitHub vond dit)."""
+    monkeypatch.setattr(app.time, "monotonic", lambda: 12.0)
+    uri = "spotify:track:b1t0"
+    assert player.liked_state(uri) is None
+    player.work()
+    assert player.liked_state(uri) is True

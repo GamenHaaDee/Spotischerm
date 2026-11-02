@@ -43,7 +43,7 @@ class FrameBuffer:
         self.out = pygame.Surface((self.w, self.h), 0, self.bpp, masks)
         self.file = open(f"/dev/{name}", "r+b")
         self.mem = mmap.mmap(self.file.fileno(), self.stride * self.h)
-        self.unblanked = 0.0
+        self.unblanked = float("-inf")  # nog nooit: meteen de eerste keer
 
     def unblank(self):
         """Het scherm aanzetten als de console het in slaap heeft gezet (anders zie je zwart)."""

@@ -531,7 +531,9 @@ class Player:
         if not self.can_like or not uri:
             return None
         with self.lock:
-            state, asked = self.liked.get(uri, (None, 0.0))
+            # Nog nooit gevraagd = -oneindig, niet 0: monotonic() telt vanaf het opstarten van de Pi,
+            # dus vlak na een herstart zou 0 'net gevraagd' lijken (en het hartje leeg blijven).
+            state, asked = self.liked.get(uri, (None, -math.inf))
             if time.monotonic() - asked > LIKE_REFRESH and uri not in self._like_busy:
                 self._like_busy.add(uri)
                 self._run(self._check_liked, uri)
@@ -934,7 +936,7 @@ class Screen:
         self.cover_accent = None
         self.p = None
         self.local = local
-        self.devices_asked = 0.0
+        self.devices_asked = -math.inf  # nog nooit (zie liked_state)
         self.settings = settings
         self.weather = weather
         self.fonts = {}
