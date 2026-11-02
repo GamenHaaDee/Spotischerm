@@ -17,7 +17,7 @@ import tempfile
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parent.parent
-MODULES = ["spotischerm", "common", "discovery", "hardware", "fonts", "i18n", "lyrics", "share", "weather"]
+MODULES = ["spotischerm", "common", "discovery", "hardware", "fonts", "i18n", "lyrics", "share", "weather", "nepspotify", "login", "watchdog"]
 FONT_FILES = ["DejaVuSans.ttf", "DejaVuSans-Bold.ttf"]
 
 

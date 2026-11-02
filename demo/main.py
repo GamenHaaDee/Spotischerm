@@ -3,7 +3,7 @@
 Gebouwd met pygbag (pygame -> WebAssembly), zie demo/README.md. In de browser zijn er geen
 threads, geen netwerk en geen GPIO; daarom:
   - draaien de achtergrondklussen van de app hier gewoon in de hoofdlus;
-  - vervangt FakeSpotify de Spotify Web API (playlists, albums en hoezen zijn verzonnen);
+  - vervangt FakeSpotify (app/nepspotify.py) de Spotify Web API; de hoezen tekent de demo zelf;
   - zijn requests, spotipy, de webpagina en updates vervangen door lege stand-ins.
 Er gaat dus niets naar Spotify of naar een andere website.
 """
@@ -23,6 +23,7 @@ sys.path.insert(0, HERE)
 threading.Thread.start = lambda self: None  # geen threads: de demo doet alles zelf in de hoofdlus
 
 COVERS = {}  # url -> hoes (pygame-plaatje), gevuld door make_covers()
+COVER_PREFIX = "demo://hoes/"
 
 
 def _get(url, **kwargs):
@@ -48,6 +49,7 @@ _spotipy.exceptions = types.ModuleType("spotipy.exceptions")
 _spotipy.exceptions.SpotifyException = SpotifyException
 _spotipy.oauth2 = types.ModuleType("spotipy.oauth2")
 _spotipy.oauth2.SpotifyOAuth = object
+_spotipy.oauth2.SpotifyOauthError = type("SpotifyOauthError", (Exception,), {})
 sys.modules.update({"spotipy": _spotipy, "spotipy.exceptions": _spotipy.exceptions,
                     "spotipy.oauth2": _spotipy.oauth2})
 
@@ -55,6 +57,8 @@ _web = types.ModuleType("web")
 _web.SettingsServer = object
 _updates = types.ModuleType("updates")
 _updates.Updates = object
+_updates.previous = lambda: None  # geen vorige versie in de browser
+_updates.restore = lambda: None
 sys.modules.update({"web": _web, "updates": _updates})
 
 import pygame  # noqa: E402
@@ -73,6 +77,7 @@ import discovery  # noqa: E402
 import lyrics  # noqa: E402
 import weather  # noqa: E402
 from lyrics import Lyrics  # noqa: E402
+from nepspotify import ALBUMS, FakeSpotify, lyrics_for  # noqa: E402
 
 # pygbag heeft zelf een 'requests'; die gaat echt het internet op. Hier overal de stand-in gebruiken.
 for _module in (app, discovery, lyrics, weather):
@@ -120,241 +125,9 @@ def cover(seed):
     return s
 
 
-ARTISTS = {"a1": "The Example Band", "a2": "Pixel Parade", "a3": "Nachtvlinder"}
-ALBUMS = {  # id -> (naam, artiest, jaar, soort, nummers (naam, seconden))
-    "b1": ("Night Drive", "a1", "2024", "album", [("Neon Horizon", 228), ("City Lights", 201), ("Midnight Run", 245),
-                                                  ("Chrome Hearts", 189), ("Last Exit", 260)]),
-    "b2": ("Afterglow", "a1", "2021", "album", [("Sunset Boulevard", 214), ("Static Love", 198),
-                                                ("Electric Dreams", 233)]),
-    "b3": ("8-bit Summer", "a2", "2025", "album", [("Arcade Heart", 176), ("Level Up", 183), ("Bonus Stage", 205),
-                                                   ("Game Over (Not Yet)", 221)]),
-    "b4": ("Zomeravond", "a3", "2023", "single", [("Zomeravond", 199)]),
-    "b5": ("Lichtjes", "a3", "2022", "album", [("Lichtjes in de stad", 236), ("Fietsen naar huis", 208),
-                                               ("Tot morgen", 247)]),
-}
-TRACKS, ALBUM_TRACKS = {}, {}
-for album_id, (album_name, artist_id, year, kind, songs) in ALBUMS.items():
-    ALBUM_TRACKS[album_id] = []
-    for n, (song, seconds) in enumerate(songs):
-        track_id = f"{album_id}t{n}"
-        ALBUM_TRACKS[album_id].append(track_id)
-        TRACKS[track_id] = (song, seconds * 1000, artist_id, album_id)
-PLAYLISTS = {
-    "p1": ("Avondrit", ["b1t0", "b3t0", "b5t0", "b2t2", "b1t1", "b4t0", "b3t2", "b1t3"]),
-    "p2": ("Synthwave Classics", ["b2t0", "b1t2", "b2t1", "b1t4", "b2t2"]),
-    "p3": ("Feestje", ["b3t1", "b3t3", "b1t0", "b5t1", "b3t0"]),
-    "p4": ("Rustig aan", ["b5t2", "b4t0", "b5t0", "b2t1"]),
-}
-LYRICS_LINES = ["Headlights painting lines across the dark", "Radio is humming something new",
-                "Every city light becomes a spark", "And every spark is leading back to you", "♪",
-                "Drive, drive, into the neon horizon", "Where the night is ours to keep",
-                "Drive, drive, with the windows wide open", "We don't need the stars to sleep", "Oh-oh, oh-oh",
-                "Into the neon horizon", "♪"]
-
-
-def artist_obj(artist_id):
-    return {"id": artist_id, "uri": f"spotify:artist:{artist_id}", "name": ARTISTS[artist_id], "type": "artist"}
-
-
-def album_obj(album_id):
-    name, artist_id, year, kind, _ = ALBUMS[album_id]
-    return {"id": album_id, "uri": f"spotify:album:{album_id}", "name": name, "album_type": kind,
-            "release_date": f"{year}-05-01", "artists": [artist_obj(artist_id)],
-            "images": [{"url": f"demo://hoes/{album_id}.jpg", "width": 300, "height": 300}]}
-
-
-def track_obj(track_id):
-    name, ms, artist_id, album_id = TRACKS[track_id]
-    return {"id": track_id, "uri": f"spotify:track:{track_id}", "type": "track", "name": name, "duration_ms": ms,
-            "artists": [artist_obj(artist_id)], "album": album_obj(album_id)}
-
-
-def playlist_obj(playlist_id):
-    name, tracks = PLAYLISTS[playlist_id]
-    return {"id": playlist_id, "uri": f"spotify:playlist:{playlist_id}", "name": name,
-            "owner": {"display_name": "Demo"}, "tracks": {"total": len(tracks)}}
-
-
 def make_covers():
     for album_id in ALBUMS:
-        COVERS[f"demo://hoes/{album_id}.jpg"] = cover(album_id)
-
-
-class FakeSpotify:
-    """Doet alsof het de Spotify Web API is, met de verzonnen muziek hierboven."""
-
-    def __init__(self):
-        self.devices_list = [
-            {"id": "d1", "name": "Woonkamer Speaker", "type": "Speaker", "volume_percent": 45},
-            {"id": "d2", "name": "Keuken", "type": "Speaker", "volume_percent": 30},
-            {"id": "d3", "name": "Tv Woonkamer", "type": "TV", "volume_percent": 20},
-            {"id": "d4", "name": "Pixel-telefoon", "type": "Smartphone", "volume_percent": 80},
-        ]
-        self.device = "d1"
-        self.liked = {"spotify:track:b1t0"}
-        self.queue_extra = []
-        self.recent = []
-        self.shuffle_state, self.repeat_state = False, "off"
-        self._play("spotify:playlist:p1", PLAYLISTS["p1"][1], 0, playing=True, progress=44000)
-
-    # -- afspeelstand --
-
-    def _play(self, context_uri, track_ids, index, playing=True, progress=0):
-        self.context_uri, self.order, self.index, self.playing = context_uri, list(track_ids), index, playing
-        self.progress, self.since = progress, time.monotonic()
-        self.recent.insert(0, (self.order[index], time.time()))
-
-    def _position(self):
-        pos = self.progress + ((time.monotonic() - self.since) * 1000 if self.playing else 0)
-        duration = TRACKS[self.order[self.index]][1]
-        while pos >= duration:  # nummer afgelopen: door naar het volgende
-            pos -= duration
-            if not self._advance(1):
-                self.playing, pos = False, 0
-                break
-            duration = TRACKS[self.order[self.index]][1]
-        self.progress, self.since = pos, time.monotonic()
-        return pos
-
-    def _advance(self, step):
-        if step > 0 and self.queue_extra:
-            self.order.insert(self.index + 1, self.queue_extra.pop(0))
-        if self.repeat_state == "track":
-            return True
-        nxt = self.index + step
-        if self.shuffle_state and step > 0 and len(self.order) > 1:
-            nxt = random.choice([i for i in range(len(self.order)) if i != self.index])
-        if not 0 <= nxt < len(self.order):
-            if self.repeat_state != "context":
-                return False
-            nxt %= len(self.order)
-        self.index = nxt
-        self.recent.insert(0, (self.order[self.index], time.time()))
-        return True
-
-    def _device(self):
-        d = next(d for d in self.devices_list if d["id"] == self.device)
-        return dict(d, is_active=True)
-
-    def current_playback(self, additional_types=None):
-        pos = self._position()
-        return {"is_playing": self.playing, "progress_ms": int(pos), "item": track_obj(self.order[self.index]),
-                "device": self._device(), "shuffle_state": self.shuffle_state, "repeat_state": self.repeat_state,
-                "context": {"uri": self.context_uri, "type": self.context_uri.split(":")[1]}}
-
-    def start_playback(self, device_id=None, context_uri=None, uris=None, offset=None):
-        if context_uri:
-            kind, ident = context_uri.split(":")[1:]
-            ids = (PLAYLISTS[ident][1] if kind == "playlist" else ALBUM_TRACKS[ident] if kind == "album"
-                   else [t for a, (_, artist, *_r) in ALBUMS.items() if artist == ident for t in ALBUM_TRACKS[a]])
-            index = 0
-            if offset and "position" in offset:
-                index = offset["position"]
-            elif offset and "uri" in offset:
-                index = ids.index(offset["uri"].split(":")[-1])
-            self._play(context_uri, ids, index)
-        elif uris:  # een los nummer: speel het in de context van zijn album
-            track_id = uris[0].split(":")[-1]
-            album_id = TRACKS[track_id][3]
-            self._play(f"spotify:album:{album_id}", ALBUM_TRACKS[album_id], ALBUM_TRACKS[album_id].index(track_id))
-        else:
-            self._position()
-            self.playing, self.since = True, time.monotonic()
-
-    def pause_playback(self, device_id=None):
-        self._position()
-        self.playing = False
-
-    def next_track(self, device_id=None):
-        self._position()
-        if self._advance(1):
-            self.progress = 0
-
-    def previous_track(self, device_id=None):
-        self._position()
-        if self._advance(-1):
-            self.progress = 0
-
-    def seek_track(self, ms, device_id=None):
-        self.progress, self.since = ms, time.monotonic()
-
-    def volume(self, volume, device_id=None):
-        next(d for d in self.devices_list if d["id"] == self.device)["volume_percent"] = volume
-
-    def shuffle(self, state, device_id=None):
-        self.shuffle_state = state
-
-    def repeat(self, state, device_id=None):
-        self.repeat_state = state
-
-    def devices(self):
-        return {"devices": [dict(d, is_active=d["id"] == self.device) for d in self.devices_list]}
-
-    def transfer_playback(self, device_id, force_play=True):
-        self._position()
-        self.device = device_id
-
-    # -- bibliotheek --
-
-    def current_user_saved_tracks_contains(self, uris):
-        return [u in self.liked for u in uris]
-
-    def current_user_saved_tracks_add(self, uris):
-        self.liked.update(uris)
-
-    def current_user_saved_tracks_delete(self, uris):
-        self.liked.difference_update(uris)
-
-    def current_user_playlists(self, limit=50):
-        return {"items": [playlist_obj(p) for p in PLAYLISTS], "next": None}
-
-    def playlist_items(self, playlist_id, limit=100, additional_types=None):
-        ids = PLAYLISTS[playlist_id.split(":")[-1]][1]
-        return {"items": [{"track": track_obj(t)} for t in ids], "offset": 0, "next": None}
-
-    def playlist(self, uri, fields=None):
-        return playlist_obj(uri.split(":")[-1])
-
-    def album(self, album_id):
-        album = album_obj(album_id.split(":")[-1])
-        album["tracks"] = {"items": [track_obj(t) for t in ALBUM_TRACKS[album["id"]]], "next": None}
-        return album
-
-    def artist(self, artist_id):
-        return artist_obj(artist_id.split(":")[-1])
-
-    def artist_albums(self, artist_id, album_type=None, limit=10):
-        return {"items": [album_obj(a) for a, v in ALBUMS.items() if v[1] == artist_id], "next": None}
-
-    def next(self, page):
-        return None
-
-    def search(self, q, limit=10, type="track"):
-        q = q.lower().replace('artist:"', "").replace('"', "").strip()
-        match = lambda name: not q or q in name.lower()
-        tracks = [track_obj(t) for t, v in TRACKS.items() if match(v[0]) or match(ARTISTS[v[2]])]
-        out = {"tracks": {"items": (tracks or [track_obj(t) for t in TRACKS])[:limit]}}
-        if "artist" in type:
-            out["artists"] = {"items": [artist_obj(a) for a, n in ARTISTS.items() if match(n)]}
-            out["albums"] = {"items": [album_obj(a) for a, v in ALBUMS.items() if match(v[0]) or match(ARTISTS[v[1]])]}
-            out["playlists"] = {"items": [playlist_obj(p) for p, v in PLAYLISTS.items() if match(v[0])]}
-        return out
-
-    def queue(self):
-        upcoming = self.queue_extra + self.order[self.index + 1:]
-        return {"queue": [track_obj(t) for t in upcoming[:20]]}
-
-    def add_to_queue(self, uri, device_id=None):
-        self.queue_extra.append(uri.split(":")[-1])
-
-    def current_user_recently_played(self, limit=50):
-        stamp = lambda t: time.strftime("%Y-%m-%dT%H:%M:%S.000Z", time.gmtime(t))
-        items = [{"track": track_obj(t), "played_at": stamp(when),
-                  "context": {"uri": "spotify:playlist:p1"}} for t, when in self.recent[:limit]]
-        older = [("b3t1", 3), ("b2t0", 26), ("b5t2", 50)]
-        items += [{"track": track_obj(t), "played_at": stamp(time.time() - h * 3600),
-                   "context": {"uri": "spotify:album:" + t[:2]}} for t, h in older]
-        return {"items": items}
+        COVERS[f"{COVER_PREFIX}{album_id}.jpg"] = cover(album_id)
 
 
 class Weather:
@@ -382,13 +155,6 @@ def refresh(player):
             player.art_url, player.art_image = url, COVERS.get(url)
 
 
-def fake_lyrics(item):
-    """Bij elk nummer dezelfde verzonnen tekst, verdeeld over de lengte van het nummer."""
-    seconds = (item.get("duration_ms") or 200000) / 1000
-    step = (seconds - 20) / len(LYRICS_LINES)
-    return Lyrics(synced=[(12 + i * step, line) for i, line in enumerate(LYRICS_LINES)])
-
-
 # ---------- de hoofdlus ----------
 
 def browser_language():
@@ -406,8 +172,6 @@ def browser_language():
 async def main():
     make_covers()
     app.save_settings = lambda settings: None
-    app.make_client = lambda scope=None: FakeSpotify()
-    app.granted_scopes = lambda: set(app.SCOPES.split())
     app.local_ip = lambda: None  # geen netwerk in de browser: geen telefoonpagina
     settings = {"weer_plaats": "Utrecht", "idle_min": 2, "nacht_stijl": "uit", "nacht_van": "23:00",
                 "nacht_tot": "07:00", "rust_scherm": "hoes", "taal": "nl", "lettertype": "standaard",
@@ -416,8 +180,8 @@ async def main():
     if lang in ("nl", "en", "de", "fr", "es"):
         settings["taal"] = lang
     ui = app.Screen(SURFACE, settings, Weather(), False)
-    ui.lyrics.get = fake_lyrics
-    ui.p = player = app.Player()
+    ui.lyrics.get = lambda item: Lyrics(synced=lyrics_for(item))
+    ui.p = player = app.Player(sp=FakeSpotify(image_prefix=COVER_PREFIX), threads=False)
     clock = pygame.time.Clock()
     finger, polled = None, 0.0
     while True:
@@ -456,14 +220,7 @@ async def main():
             elif ev.type == pygame.MOUSEWHEEL:
                 ui.scroll = max(0, ui.scroll - ev.y * ui.px(60))
         # Wat de app normaal in achtergrondthreads doet: klussen uitvoeren en de stand ophalen.
-        busy = False
-        while not player._jobs.empty():
-            fn, args = player._jobs.get_nowait()
-            try:
-                fn(*args)
-            except Exception as err:  # zoals in Player._job_loop
-                print("Demo:", err)
-            busy = True
+        busy = player.work()
         if busy or time.monotonic() - polled > 1:
             polled = time.monotonic()
             refresh(player)

@@ -41,11 +41,16 @@ sed "s|__USER__|$USER|g; s|__DIR__|$PWD|g" spotischerm.service \
   | sudo tee /etc/systemd/system/spotischerm.service >/dev/null
 sudo systemctl daemon-reload
 sudo systemctl enable spotischerm
+# Draait de app al (opnieuw installeren of bijwerken)? Dan herstarten, zodat de nieuwe service geldt.
+if systemctl is-active --quiet spotischerm; then
+  sudo systemctl restart spotischerm
+fi
 
 cat <<EOF
 
 Geinstalleerd. Nog drie stappen:
   1. nano config.env                  (Client ID en Secret invullen)
-  2. .venv/bin/python app/auth.py     (eenmalig inloggen bij Spotify)
+  2. .venv/bin/python app/auth.py     (eenmalig inloggen bij Spotify; of sla dit over en
+                                      scan na de reboot de QR-code op het scherm)
   3. sudo reboot
 EOF

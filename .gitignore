@@ -10,12 +10,17 @@ instellingen.json
 instellingen.tmp
 # Hoe lang Spotify de app laat wachten na "te veel verzoeken"
 .spotify-wachten
+# Hoeveel verzoeken de app naar Spotify stuurt (Info-pagina)
+.spotify-teller
+# De vorige versie, bewaard bij het bijwerken (om terug te kunnen)
+.vorige-versie/
 
 # --- Python ---
 .venv/
 venv/
 .demo-venv/
 __pycache__/
+.pytest_cache/
 *.py[cod]
 
 # --- Besturingssystemen en editors ---

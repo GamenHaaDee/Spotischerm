@@ -30,6 +30,8 @@ op een Raspberry Pi, van de allereerste Pi 1 tot de Pi 5.
   kent, zoals Google Cast, staan in de lijst (grijs).
 - **Playlists:** scroll door je playlists en start een hele lijst of één nummer, waarna de
   playlist gewoon verder speelt. Met **+ Wachtrij** zet je een nummer in de wachtrij.
+  Bovenaan staan **♥ Gelikete nummers** (je likes, af te spelen als lijst) en **★ Jouw top**:
+  je meest beluisterde artiesten en nummers van de laatste 4 weken, 6 maanden of ooit.
 - **Recent gespeeld:** je laatste playlists, albums en nummers, met "2 uur geleden".
 - **Zoeken** met een schermtoetsenbord: nummers, artiesten, albums en playlists.
 - **Wachtrij:** zien wat er hierna komt.
@@ -41,6 +43,7 @@ op een Raspberry Pi, van de allereerste Pi 1 tot de Pi 5.
   langzaam zachter.
 - **Rustscherm:** raak je het scherm een tijdje niet aan, dan verschijnt de albumhoes groot met
   de tijd erbij. Speelt er niks, dan zie je een klok met weer en regenverwachting.
+  De klok kan digitaal, analoog of als flipklok (Instellingen → Rustscherm).
 - **Nachtmodus:** in het uur voor de nacht wordt het scherm langzaam donkerder. 's Nachts toont
   het een zeer gedimde rode of grijze klok, of wordt het helemaal zwart.
 - **Vegen:** veeg op het hoofdscherm naar links voor het volgende nummer en naar rechts voor het
@@ -56,6 +59,8 @@ op een Raspberry Pi, van de allereerste Pi 1 tot de Pi 5.
   knoppen om de Pi veilig te herstarten of uit te zetten.
 - **Updates:** de app kijkt op GitHub of er een nieuwe versie is en meldt dat. Onder
   Instellingen → Bijwerken installeer je hem met één tik; je instellingen en login blijven staan.
+  Gaat er iets mis met een nieuwe versie? Onder Bijwerken zet *Vorige versie terugzetten* de oude
+  met één tik terug.
 - **Verzoekjes van gasten:** gasten scannen een QR-code op de Delen-pagina, zoeken op hun telefoon
   een nummer en zetten het in de wachtrij (maximaal 3 per gast per kwartier).
 - **Instellingen via je telefoon:** dezelfde instellingen op een webpagina, op
@@ -69,6 +74,11 @@ op een Raspberry Pi, van de allereerste Pi 1 tot de Pi 5.
 - **Volumeknop en bewegingssensor** (optioneel, op de GPIO): draai voor het volume, druk voor
   pauze; zonder beweging gaat het scherm op zwart. Aansluiten: zie
   [behuizing/aansluitschema-3pin.svg](behuizing/aansluitschema-3pin.svg).
+- **Back-up van je instellingen:** download ze op de telefoonpagina en zet ze terug, bijv. na een
+  nieuwe SD-kaart. Zonder wachtwoorden of je Spotify-login.
+- **Zelfherstel:** loopt de app vast, dan herstart hij binnen anderhalve minuut vanzelf.
+- **Verzoekenteller:** de info-pagina toont hoeveel verzoeken de app vandaag en dit uur naar Spotify
+  stuurde.
 - **Drie schermvormen:** liggend, rond (bijv. Waveshare 1080×1080) en staand, elk met een eigen
   indeling.
 
@@ -206,6 +216,10 @@ Je krijgt een lange link. Open die **op je pc**, log in en klik op Akkoord. Je b
 `http://127.0.0.1:8888/callback?code=...` en zegt dat de pagina niet bestaat. **Dat hoort zo.**
 Kopieer de hele adresbalk, plak hem in het SSH-venster en druk op Enter.
 
+**Of log in via je telefoon:** sla deze stap over. Na het herstarten toont het scherm een QR-code;
+scan die met je telefoon (op hetzelfde wifi-netwerk) en volg de stappen. Het werkt hetzelfde, maar dan
+in de browser van je telefoon.
+
 ### 5. Herstarten
 
 ```bash
@@ -284,20 +298,27 @@ Zet `SPOTISCHERM_WINDOWED=1` in `config.env`, installeer `pip install pygame-ce 
 en voer `python app/auth.py` en daarna `python app/spotischerm.py` uit. Je krijgt een venster van
 800×480. Esc sluit het.
 
+Geen Spotify-account bij de hand, of wil je geen quotum verbruiken? Met `SPOTISCHERM_NEP_SPOTIFY=1`
+gebruikt de app een nep-Spotify met verzonnen muziek ([app/nepspotify.py](app/nepspotify.py)); er gaat
+niets naar Spotify en je hoeft niet in te loggen.
+
+**Tests:** `pip install pytest pygame requests spotipy segno` en dan `python -m pytest`. Ze draaien
+zonder scherm en tegen de nep-Spotify, en ook bij elke push op GitHub.
+
 ## Privacy: welke gegevens gaan waarheen
 
 SpotiScherm heeft geen eigen server en verzamelt niks. De app praat alleen met deze diensten:
 
 | Met wie | Wat | Wanneer |
 |---|---|---|
-| **Spotify** (api.spotify.com, accounts.spotify.com) | Je login, wat er speelt, je apparaten, playlists en recent gespeeld, zoekopdrachten, en de opdrachten die je geeft (play, volume…) | altijd, daar is de app voor |
+| **Spotify** (api.spotify.com, accounts.spotify.com) | Je login, wat er speelt, je apparaten, playlists en recent gespeeld, je gelikete nummers en je top, zoekopdrachten, en de opdrachten die je geeft (play, volume…) | altijd, daar is de app voor |
 | **Spotify-afbeeldingen** (i.scdn.co) | Het ophalen van de albumhoes | bij elk nieuw nummer |
 | **Open-Meteo** (open-meteo.com) | De plaatsnaam die je instelt, en daarna de coördinaten ervan voor het weer | alleen als je een weerplaats instelt, elk kwartier |
 | **LRCLIB** (lrclib.net) | Titel, artiest, album en lengte van het nummer dat speelt | alleen als je de songtekst opent |
 | **Je eigen netwerk** | Zoeken naar speakers via mDNS, en Spotify Connect-apparaten naar hun naam vragen | zolang de app draait; dit blijft in je eigen netwerk |
 | **GitHub** (api.github.com) | Vragen welke versie de nieuwste is, en die downloaden als je op Bijwerken tikt | elke 6 uur; uitzetten met `SPOTISCHERM_UPDATES=0` |
 | **Je eigen netwerk** | De verzoekjespagina (`/verzoekjes`): iedereen op je wifi kan zoeken en nummers in de wachtrij zetten | zolang de app draait; uitzetten met `SPOTISCHERM_VERZOEKJES=0` |
-| **Je eigen netwerk** | De instellingenpagina op poort 8080. Iedereen op je wifi kan hem openen; hij toont en wijzigt alleen de scherminstellingen, nooit je Spotify-sleutels of wachtwoorden | zolang de app draait; uitzetten met `SPOTISCHERM_WEB_POORT=0` |
+| **Je eigen netwerk** | De instellingenpagina op poort 8080. Iedereen op je wifi kan hem openen; hij toont en wijzigt alleen de scherminstellingen, nooit je Spotify-sleutels of wachtwoorden. Ook inloggen bij Spotify (`/inloggen`, alleen als er nog niemand is ingelogd of als je dat op het scherm openzet) en de back-up van je instellingen gaan via deze pagina | zolang de app draait; uitzetten met `SPOTISCHERM_WEB_POORT=0` |
 
 Alles wat van jou is, blijft op de Pi: je Spotify-sleutels (`config.env`), je login
 (`.spotify-cache`) en je instellingen (`instellingen.json`). De `.gitignore` zorgt dat die niet per
@@ -341,7 +362,7 @@ Uitgebreide gids met diagnose-stappen per symptoom (in het Engels):
 | Tikken werkt niet | Staat de USB-touchkabel in de Pi? `sudo apt install evtest && sudo evtest` laat zien of de Pi het touchscreen ziet |
 | "Niet toegestaan" | Spotify Premium nodig, of dat apparaat laat zich niet op afstand bedienen |
 | `install.sh`: `$'\r': command not found` | Windows-regeleindes: `sed -i 's/\r$//' install.sh` |
-| Na maanden ineens uitgelogd | Voer `app/auth.py` opnieuw uit |
+| Na maanden ineens uitgelogd | Instellingen → Spotify-account → Opnieuw inloggen (via je telefoon), of voer `app/auth.py` opnieuw uit |
 
 ## Een taal toevoegen
 

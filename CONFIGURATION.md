@@ -49,6 +49,7 @@ You can also change these on the screen. See the [mapping table](#instellingenjs
 | `WEER_PLAATS` | *(empty)* | a place name, e.g. `Utrecht` | Location for the weather on the clock. Empty = no weather |
 | `WEER_LAND` | `NL` | two-letter country code, or empty | Country to look the place up in ([Open-Meteo](https://open-meteo.com) geocoding). Empty = search worldwide |
 | `RUST_SCHERM` | `hoes` | `hoes`, `klok` | Idle screen: `hoes` = the album cover when music plays (the clock otherwise), `klok` = always the clock |
+| `KLOK_STIJL` | `digitaal` | `digitaal`, `analoog`, `flip` | Style of the clock: digital, an analogue clock face, or a flip clock |
 | `SPOTISCHERM_IDLE_MIN` | `5` | minutes; `0` = never | Minutes without touch before the idle screen appears (also while music plays) |
 | `NACHT_STIJL` | `rood` | `uit`, `zwart`, `rood`, `grijs` | Night mode: off, black screen, dim red clock, or dim grey clock |
 | `NACHT_VAN` | `23:00` | `HH:MM` | Start of the night. Leave `NACHT_VAN` and `NACHT_TOT` both empty to turn night mode off |
@@ -71,6 +72,7 @@ You can also change these on the screen. See the [mapping table](#instellingenjs
 | `SPOTISCHERM_BEWEGING` | `0` | `0`, `1`, or a GPIO number | Motion sensor (PIR, e.g. AM312). `1` = GPIO27. With nobody around, the screen goes black; movement brings it back |
 | `SPOTISCHERM_BEWEGING_MIN` | `10` | minutes | Motion sensor: the screen goes black after this many minutes without movement and without touch |
 | `SPOTISCHERM_ZUINIG` | `0` | `0`, `1` | Economy mode for slow Pis: 300 px album cover, simple scaling, at most 10 fps, no scrolling titles, no coloured background |
+| `SPOTISCHERM_NEP_SPOTIFY` | `0` | `0`, `1` | `1` = use a fake Spotify with made-up music (`app/nepspotify.py`) instead of the real one: for trying the app on a PC without an account, and without using up the Spotify quota. No login needed |
 | `SPOTISCHERM_WINDOWED` | `0` | `0`, `1` | `1` = run in an 800×480 window (540×540 when round), for testing on a PC |
 | `SPOTISCHERM_MUIS` | `0` | `0`, `1` | `1` = show the mouse cursor in full screen. Not available in framebuffer mode |
 | `SPOTISCHERM_TOON_FPS` | `0` | `0`, `1` | `1` = show frames per second and milliseconds per frame in the top right |
@@ -97,6 +99,7 @@ The screen settings (gear icon) and the key each one is saved under:
 |---|---|---|
 | Weather → place | `weer_plaats` | `WEER_PLAATS` |
 | Idle screen → what to show | `rust_scherm` | `RUST_SCHERM` |
+| Idle screen → clock | `klok_stijl` | `KLOK_STIJL` |
 | Idle screen → after how many minutes | `idle_min` (`0` = never) | `SPOTISCHERM_IDLE_MIN` |
 | Night mode → style | `nacht_stijl` | `NACHT_STIJL` |
 | Night mode → from / until | `nacht_van`, `nacht_tot` | `NACHT_VAN`, `NACHT_TOT` |

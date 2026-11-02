@@ -32,6 +32,8 @@ Raspberry Pi, from the very first Pi 1 up to the Pi 5.
   too (in grey).
 - **Playlists:** scroll through your playlists and play a whole list, or start from one song and
   let the playlist continue. **+ Queue** adds a song to the queue instead.
+  At the top: **♥ Liked Songs** (your likes, played as a list) and **★ Your top**: your most
+  played artists and songs of the last 4 weeks, 6 months or all time.
 - **Recently played:** your latest playlists, albums and songs, with "2 h ago".
 - **Search** with an on-screen keyboard: songs, artists, albums and playlists.
 - **Queue:** see what's up next.
@@ -42,6 +44,7 @@ Raspberry Pi, from the very first Pi 1 up to the Pi 5.
 - **Sleep timer:** the music stops after 15 to 120 minutes, and fades out during the last minute.
 - **Idle screen:** when nobody touches the screen for a while, the album cover is shown large with
   the time. When nothing is playing, you get a clock with the weather and a rain forecast.
+  The clock can be digital, analogue or a flip clock (Settings → Idle screen).
 - **Night mode:** the screen slowly dims in the hour before night. At night it shows a very dim red
   or grey clock, or goes completely black.
 - **Swipe:** on the main screen, swipe left for the next song and right for the previous one. On
@@ -56,6 +59,8 @@ Raspberry Pi, from the very first Pi 1 up to the Pi 5.
   version, and buttons to restart or shut down the Pi safely.
 - **Updates:** the app checks GitHub for new versions and tells you when one is out. Under
   Settings → Update you install it with one tap; your settings and login stay as they are.
+  Something wrong with a new version? Under Update, *Restore previous version* puts the old one
+  back with one tap.
 - **Requests from guests:** guests scan a QR code on the Share page, search for a song on their
   phone and add it to the queue (at most 3 per guest per 15 minutes).
 - **Settings from your phone:** the same settings on a web page, at `http://spotischerm.local:8080`.
@@ -69,6 +74,11 @@ Raspberry Pi, from the very first Pi 1 up to the Pi 5.
 - **Volume knob and motion sensor** (optional, on the GPIO): turn for the volume, press to pause;
   with nobody around the screen goes black. Wiring: see
   [behuizing/aansluitschema-3pin.svg](behuizing/aansluitschema-3pin.svg).
+- **Backup of your settings:** download them on the phone page and restore them, for example after
+  a new SD card. Without passwords or your Spotify login.
+- **Self-healing:** if the app freezes, it restarts by itself within a minute and a half.
+- **Request counter:** the info page shows how many requests the app sent to Spotify today and
+  this hour.
 - **Three screen shapes:** landscape, round (for example Waveshare 1080×1080) and portrait, each
   with its own layout.
 
@@ -205,6 +215,9 @@ You get a long link. Open it **on your PC**, log in and click Agree. Your browse
 `http://127.0.0.1:8888/callback?code=...` and says the page doesn't exist. **That's expected.**
 Copy the whole address bar, paste it into the SSH window and press Enter.
 
+**Or log in from your phone:** skip this step. After the reboot the screen shows a QR code; scan it
+with your phone (on the same Wi-Fi) and follow the steps. It works the same way, in your phone's browser.
+
 ### 5. Reboot
 
 ```bash
@@ -280,20 +293,27 @@ programs may use them too.
 Set `SPOTISCHERM_WINDOWED=1` in `config.env`, run `pip install pygame-ce spotipy zeroconf`, then
 `python app/auth.py` and `python app/spotischerm.py`. You get an 800×480 window; Esc closes it.
 
+No Spotify account at hand, or don't want to use up your quota? With `SPOTISCHERM_NEP_SPOTIFY=1` the app
+uses a fake Spotify with made-up music ([app/nepspotify.py](app/nepspotify.py)); nothing is sent to
+Spotify and you don't need to log in.
+
+**Tests:** `pip install pytest pygame requests spotipy segno`, then `python -m pytest`. They run
+without a screen and against the fake Spotify, and also run on GitHub for every push.
+
 ## Privacy: which data goes where
 
 SpotiScherm has no server of its own and collects nothing. The app only talks to these services:
 
 | Service | What | When |
 |---|---|---|
-| **Spotify** (api.spotify.com, accounts.spotify.com) | Your login, what's playing, your devices, playlists and recently played, searches, and the commands you give (play, volume…) | always, that's what the app is for |
+| **Spotify** (api.spotify.com, accounts.spotify.com) | Your login, what's playing, your devices, playlists and recently played, your liked songs and your top, searches, and the commands you give (play, volume…) | always, that's what the app is for |
 | **Spotify images** (i.scdn.co) | Downloading the album cover | for every new song |
 | **Open-Meteo** (open-meteo.com) | The place name you enter, then its coordinates for the forecast | only if you set a weather location, every 15 minutes |
 | **LRCLIB** (lrclib.net) | Title, artist, album and length of the song that's playing | only when you open the lyrics |
 | **Your own network** | Looking for speakers over mDNS, and asking Spotify Connect devices for their name | while the app runs; this stays on your network |
 | **GitHub** (api.github.com) | Asking which version is the newest, and downloading it when you tap Update | every 6 hours; turn it off with `SPOTISCHERM_UPDATES=0` |
 | **Your own network** | The requests page (`/verzoekjes`): anyone on your Wi-Fi can search and add songs to the queue | while the app runs; turn it off with `SPOTISCHERM_VERZOEKJES=0` |
-| **Your own network** | The settings page on port 8080. Anyone on your Wi-Fi can open it; it shows and changes only the screen settings, never your Spotify keys or passwords | while the app runs; turn it off with `SPOTISCHERM_WEB_POORT=0` |
+| **Your own network** | The settings page on port 8080. Anyone on your Wi-Fi can open it; it shows and changes only the screen settings, never your Spotify keys or passwords. Logging in to Spotify (`/inloggen`, only when nobody is logged in yet or when you open it on the screen) and the backup of your settings also go through this page | while the app runs; turn it off with `SPOTISCHERM_WEB_POORT=0` |
 
 Everything personal stays on the Pi: your Spotify keys (`config.env`), your login
 (`.spotify-cache`) and your settings (`instellingen.json`). The `.gitignore` keeps them out of git.
@@ -337,7 +357,7 @@ cause and the fix. The most common ones:
 | Taps do nothing | Is the USB touch cable plugged into the Pi? `sudo apt install evtest && sudo evtest` shows whether the Pi sees the touchscreen |
 | "Not allowed" | Spotify Premium is needed, or that device can't be controlled remotely |
 | `install.sh`: `$'\r': command not found` | Windows line endings: `sed -i 's/\r$//' install.sh` |
-| Logged out after months | Run `app/auth.py` again |
+| Logged out after months | Settings → Spotify account → Log in again (from your phone), or run `app/auth.py` again |
 
 ## Adding a language
 

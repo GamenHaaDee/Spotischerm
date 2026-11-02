@@ -11,6 +11,9 @@ Environment=PYTHONUNBUFFERED=1
 ExecStart=__DIR__/.venv/bin/python app/spotischerm.py
 Restart=always
 RestartSec=5
+# Zelfherstel: de app mag systemd laten weten dat hij nog leeft, en zet zelf de watchdog aan
+# (zie app/watchdog.py). Loopt hij vast, dan herstart systemd hem.
+NotifyAccess=main
 
 [Install]
 WantedBy=multi-user.target

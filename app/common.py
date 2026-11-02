@@ -1,7 +1,9 @@
 """Gedeelde instellingen en de Spotify-client voor SpotiScherm."""
 import json
 import os
+import threading
 import time
+from datetime import datetime, timedelta
 from pathlib import Path
 
 import spotipy
@@ -22,6 +24,7 @@ SCOPES = " ".join([
     "user-read-recently-played",
     "user-library-read",
     "user-library-modify",
+    "user-top-read",
 ])
 
 
@@ -85,6 +88,63 @@ def _block(seconds):
         pass
 
 
+COUNT_PATH = ROOT / ".spotify-teller"
+COUNT_SAVE = 60  # zo vaak (s) de telling bewaren; niet bij elk verzoek, dat slijt de SD-kaart
+
+
+class RequestCounter:
+    """Telt de verzoeken die echt naar Spotify gaan: dit uur, vandaag en gisteren.
+
+    Spotify zegt niet hoeveel er mogen; zo zie je op de Info-pagina hoeveel de app er doet.
+    """
+
+    def __init__(self, path):
+        self.path, self.lock, self.saved = path, threading.Lock(), 0.0
+        try:
+            data = json.loads(path.read_text(encoding="utf-8"))
+        except (OSError, ValueError):
+            data = {}
+        self.day, self.today = data.get("dag", ""), int(data.get("vandaag", 0))
+        self.yesterday = int(data.get("gisteren", 0))
+        self.hour, self.this_hour = data.get("uur", ""), int(data.get("dit_uur", 0))
+
+    def _roll(self, now):
+        """Een nieuwe dag of een nieuw uur: opnieuw beginnen met tellen."""
+        day, hour = now.strftime("%Y-%m-%d"), now.strftime("%Y-%m-%dT%H")
+        if day != self.day:
+            # Was de vorige telling van gisteren, dan is dat "gisteren"; anders weten we het niet.
+            self.yesterday = self.today if self.day == (now - timedelta(days=1)).strftime("%Y-%m-%d") else 0
+            self.day, self.today = day, 0
+        if hour != self.hour:
+            self.hour, self.this_hour = hour, 0
+
+    def add(self, now=None):
+        with self.lock:
+            self._roll(now or datetime.now())
+            self.today += 1
+            self.this_hour += 1
+            if time.monotonic() - self.saved > COUNT_SAVE:
+                self._save()
+
+    def counts(self, now=None):
+        """(dit uur, vandaag, gisteren)"""
+        with self.lock:
+            self._roll(now or datetime.now())
+            return self.this_hour, self.today, self.yesterday
+
+    def _save(self):
+        self.saved = time.monotonic()
+        data = {"dag": self.day, "vandaag": self.today, "gisteren": self.yesterday,
+                "uur": self.hour, "dit_uur": self.this_hour}
+        try:
+            self.path.write_text(json.dumps(data), encoding="utf-8")
+        except OSError:
+            pass
+
+
+counter = RequestCounter(COUNT_PATH)
+
+
 class Client(spotipy.Spotify):
     """Spotify-client die bij "te veel verzoeken" niet blijft hangen.
 
@@ -103,6 +163,7 @@ class Client(spotipy.Spotify):
         if left > 0:
             raise SpotifyException(429, -1, "Spotify laat ons nog even wachten",
                                    headers={"Retry-After": str(int(left) + 1)})
+        counter.add()
         try:
             return super()._internal_call(method, url, payload, params)
         except SpotifyException as err:

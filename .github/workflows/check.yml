@@ -24,7 +24,16 @@ jobs:
         run: python -m compileall -q app
 
       - name: Lint (pyflakes)
-        run: ruff check app --select F --target-version py311
+        run: ruff check app tests demo --select F --target-version py311
+
+      - name: Install test dependencies
+        run: pip install pytest pygame requests spotipy segno
+
+      - name: Tests (fake Spotify, no screen)
+        run: python -m pytest -q tests
+        env:
+          SDL_VIDEODRIVER: dummy
+          SDL_AUDIODRIVER: dummy
 
       - name: Translations complete
         run: python .github/scripts/check_i18n.py

@@ -34,6 +34,8 @@ Läuft auf einem Raspberry Pi, vom allerersten Pi 1 bis zum Pi 5.
 - **Playlists:** Scrolle durch deine Playlists und spiele eine ganze Liste ab oder starte bei einem
   Titel, danach läuft die Playlist einfach weiter. Mit **+ Warteschlange** landet ein Titel in der
   Warteschlange.
+  Oben stehen **♥ Lieblingssongs** (deine Likes, als Liste abspielbar) und **★ Deine Top**: deine
+  meistgehörten Künstler und Titel der letzten 4 Wochen, 6 Monate oder insgesamt.
 - **Zuletzt gespielt:** deine letzten Playlists, Alben und Titel, mit „vor 2 Std.".
 - **Suche** mit Bildschirmtastatur: Titel, Künstler, Alben und Playlists.
 - **Warteschlange:** sehen, was als Nächstes kommt.
@@ -44,6 +46,7 @@ Läuft auf einem Raspberry Pi, vom allerersten Pi 1 bis zum Pi 5.
 - **Schlaftimer:** Nach 15 bis 120 Minuten stoppt die Musik, in der letzten Minute wird sie leiser.
 - **Ruhebildschirm:** Wird der Bildschirm eine Weile nicht berührt, erscheint das Albumcover groß
   mit der Uhrzeit. Läuft nichts, siehst du eine Uhr mit Wetter und Regenvorhersage.
+  Die Uhr gibt es digital, analog oder als Klappuhr (Einstellungen → Ruhebildschirm).
 - **Nachtmodus:** In der Stunde vor der Nacht wird der Bildschirm langsam dunkler. Nachts zeigt er
   eine stark gedimmte rote oder graue Uhr oder wird ganz schwarz.
 - **Wischen:** Wische auf dem Hauptbildschirm nach links für den nächsten Titel und nach rechts
@@ -59,6 +62,8 @@ Läuft auf einem Raspberry Pi, vom allerersten Pi 1 bis zum Pi 5.
   Temperatur und Version, und Knöpfe, um den Pi sicher neu zu starten oder auszuschalten.
 - **Updates:** Die App prüft auf GitHub, ob es eine neue Version gibt, und meldet das. Unter
   Einstellungen → Aktualisieren installierst du sie mit einem Tipp; Einstellungen und Anmeldung bleiben.
+  Etwas stimmt nicht mit einer neuen Version? Unter Aktualisieren holt *Vorige Version
+  wiederherstellen* die alte mit einem Tipp zurück.
 - **Musikwünsche von Gästen:** Gäste scannen einen QR-Code auf der Teilen-Seite, suchen auf dem
   Handy einen Song und fügen ihn zur Warteschlange hinzu (höchstens 3 pro Gast und Viertelstunde).
 - **Einstellungen per Handy:** dieselben Einstellungen auf einer Webseite, unter
@@ -72,6 +77,11 @@ Läuft auf einem Raspberry Pi, vom allerersten Pi 1 bis zum Pi 5.
 - **Lautstärkeregler und Bewegungsmelder** (optional, am GPIO): drehen für die Lautstärke, drücken
   für Pause; ist niemand da, wird der Bildschirm schwarz. Anschluss: siehe
   [behuizing/aansluitschema-3pin.svg](behuizing/aansluitschema-3pin.svg).
+- **Sicherung deiner Einstellungen:** auf der Handy-Seite herunterladen und wiederherstellen, z. B.
+  nach einer neuen SD-Karte. Ohne Passwörter oder deine Spotify-Anmeldung.
+- **Selbstheilung:** hängt die App, startet sie innerhalb von anderthalb Minuten von selbst neu.
+- **Anfragenzähler:** die Info-Seite zeigt, wie viele Anfragen die App heute und in dieser Stunde an
+  Spotify geschickt hat.
 - **Drei Bildschirmformen:** quer, rund (zum Beispiel Waveshare 1080×1080) und hochkant, jeweils mit
   eigenem Layout.
 
@@ -210,6 +220,10 @@ Browser geht dann zu `http://127.0.0.1:8888/callback?code=...` und meldet, dass 
 gibt. **Das ist richtig so.** Kopiere die ganze Adresszeile, füge sie ins SSH-Fenster ein und drücke
 Enter.
 
+**Oder per Handy anmelden:** überspringe diesen Schritt. Nach dem Neustart zeigt der Bildschirm einen
+QR-Code; scanne ihn mit dem Handy (im selben WLAN) und folge den Schritten. Es funktioniert genauso, nur
+im Browser deines Handys.
+
 ### 5. Neu starten
 
 ```bash
@@ -287,20 +301,27 @@ Setze `SPOTISCHERM_WINDOWED=1` in `config.env`, führe `pip install pygame-ce sp
 dann `python app/auth.py` und `python app/spotischerm.py`. Du bekommst ein Fenster mit 800×480
 Pixeln; Esc schließt es.
 
+Kein Spotify-Konto zur Hand, oder willst du kein Kontingent verbrauchen? Mit `SPOTISCHERM_NEP_SPOTIFY=1`
+nutzt die App ein Schein-Spotify mit erfundener Musik ([app/nepspotify.py](app/nepspotify.py)); nichts
+geht an Spotify, und du musst dich nicht anmelden.
+
+**Tests:** `pip install pytest pygame requests spotipy segno`, dann `python -m pytest`. Sie laufen ohne
+Bildschirm gegen das Schein-Spotify, und bei jedem Push auch auf GitHub.
+
 ## Datenschutz: welche Daten wohin gehen
 
 SpotiScherm hat keinen eigenen Server und sammelt nichts. Die App spricht nur mit diesen Diensten:
 
 | Dienst | Was | Wann |
 |---|---|---|
-| **Spotify** (api.spotify.com, accounts.spotify.com) | Deine Anmeldung, was gerade läuft, deine Geräte, Playlists und „Zuletzt gespielt", Suchanfragen und deine Befehle (Play, Lautstärke …) | immer, dafür ist die App da |
+| **Spotify** (api.spotify.com, accounts.spotify.com) | Deine Anmeldung, was gerade läuft, deine Geräte, Playlists und „Zuletzt gespielt", deine Lieblingssongs und deine Top, Suchanfragen und deine Befehle (Play, Lautstärke …) | immer, dafür ist die App da |
 | **Spotify-Bilder** (i.scdn.co) | Herunterladen des Albumcovers | bei jedem neuen Titel |
 | **Open-Meteo** (open-meteo.com) | Der Ortsname, den du einträgst, danach dessen Koordinaten für die Vorhersage | nur wenn du einen Wetterort einträgst, alle 15 Minuten |
 | **LRCLIB** (lrclib.net) | Titel, Künstler, Album und Länge des laufenden Titels | nur wenn du den Songtext öffnest |
 | **Dein eigenes Netzwerk** | Suche nach Lautsprechern per mDNS, und Spotify-Connect-Geräte nach ihrem Namen fragen | solange die App läuft; das bleibt in deinem Netzwerk |
 | **GitHub** (api.github.com) | Abfragen, welche Version die neueste ist, und sie herunterladen, wenn du auf Aktualisieren tippst | alle 6 Stunden; ausschalten mit `SPOTISCHERM_UPDATES=0` |
 | **Dein eigenes Netzwerk** | Die Wunschseite (`/verzoekjes`): Jeder in deinem WLAN kann suchen und Songs zur Warteschlange hinzufügen | solange die App läuft; ausschalten mit `SPOTISCHERM_VERZOEKJES=0` |
-| **Dein eigenes Netzwerk** | Die Einstellungsseite auf Port 8080. Jeder in deinem WLAN kann sie öffnen; sie zeigt und ändert nur die Bildschirmeinstellungen, nie deine Spotify-Schlüssel oder Passwörter | solange die App läuft; ausschalten mit `SPOTISCHERM_WEB_POORT=0` |
+| **Dein eigenes Netzwerk** | Die Einstellungsseite auf Port 8080. Jeder in deinem WLAN kann sie öffnen; sie zeigt und ändert nur die Bildschirmeinstellungen, nie deine Spotify-Schlüssel oder Passwörter. Auch die Anmeldung bei Spotify (`/inloggen`, nur wenn noch niemand angemeldet ist oder du sie am Bildschirm öffnest) und die Sicherung deiner Einstellungen laufen über diese Seite | solange die App läuft; ausschalten mit `SPOTISCHERM_WEB_POORT=0` |
 
 Alles Persönliche bleibt auf dem Pi: deine Spotify-Schlüssel (`config.env`), deine Anmeldung
 (`.spotify-cache`) und deine Einstellungen (`instellingen.json`). Die `.gitignore` hält sie aus Git
@@ -345,7 +366,7 @@ zum Finden der Ursache und der Lösung. Die häufigsten:
 | Tippen bewirkt nichts | Steckt das USB-Touch-Kabel im Pi? `sudo apt install evtest && sudo evtest` zeigt, ob der Pi den Touchscreen sieht |
 | „Nicht erlaubt" | Spotify Premium wird benötigt, oder das Gerät lässt sich nicht fernsteuern |
 | `install.sh`: `$'\r': command not found` | Windows-Zeilenenden: `sed -i 's/\r$//' install.sh` |
-| Nach Monaten abgemeldet | `app/auth.py` erneut ausführen |
+| Nach Monaten abgemeldet | Einstellungen → Spotify-Konto → Erneut anmelden (per Handy), oder `app/auth.py` erneut ausführen |
 
 ## Eine Sprache hinzufügen
 

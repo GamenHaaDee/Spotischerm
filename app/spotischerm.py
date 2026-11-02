@@ -13,16 +13,18 @@ import pygame
 import requests
 from spotipy.exceptions import SpotifyException
 
-from common import (CACHE_PATH, SCOPES, granted_scopes, load_config, load_settings, make_client, wait_left,
+from common import (CACHE_PATH, SCOPES, counter, granted_scopes, load_config, load_settings, make_client, wait_left,
                     save_settings)
 from discovery import LocalDevices, norm
 from hardware import Hardware
+from login import PhoneLogin
 import fonts
 from i18n import LANGUAGES, month, set_language, tr, weekday
 from lyrics import LyricsCache
 from share import QrCache, spotify_link, wifi_payload
 from weather import Weather
-from updates import Updates
+from updates import Updates, previous, restore
+import watchdog
 from web import SettingsServer
 
 BG = (18, 18, 18)
@@ -34,7 +36,7 @@ MUTED = (160, 160, 160)
 CLOCK = (130, 130, 130)
 CLOCK_DIM = (95, 95, 95)
 ACCENT = (30, 215, 96)     # wordt per beeld gezet uit de instelling "kleur"
-APP_VERSION = "1.3"
+APP_VERSION = "1.4"
 TOAST = (80, 80, 80)
 
 BASE_W, BASE_H = 800, 480   # rechthoekig ontwerp
@@ -77,6 +79,15 @@ SCROLLBAR_GUTTER = 30      # breedte van de strook rechts naast lange lijsten, v
 CLEAN_SECONDS = 30         # schoonmaakstand: zo lang doet aanraken niets
 SPLASH_MIN = 1.5           # opstartscherm: minstens zo lang (s), ...
 SPLASH_MAX = 20            # ... en hoogstens zo lang als Spotify niet antwoordt
+LIKED_ID = "gelikete-nummers"  # de "playlist" met je likes (die kan Spotify niet als geheel starten)
+LIKED_MAX = 200            # zoveel likes ophalen (4 verzoeken van 50), alleen als je de lijst opent
+PLAY_MAX = 100             # zoveel nummers kun je in één keer laten afspelen
+TOP_RANGES = (("short_term", "laatste 4 weken"), ("medium_term", "laatste 6 maanden"), ("long_term", "altijd"))
+TOP_KEEP = 3600            # jouw top: zo lang (s) bewaren voor we het Spotify opnieuw vragen
+POLL_DEAD = 15 * 60        # zelfherstel: zo lang (s) zonder teken van de Spotify-thread = vastgelopen
+UPDATE_TIME = 15 * 60      # zelfherstel: zoveel tijd (s) krijgt het bijwerken (trage download)
+CLOCK_STYLES = (("digitaal", "Digitaal"), ("analoog", "Analoog"), ("flip", "Flipklok"))
+FLIP_SECONDS = 0.6         # flipklok: zo lang duurt het omklappen van een kaartje
 KNOB_STEP = 3              # volumeknop: zoveel procent per klik
 KNOB_SEND = 0.35           # volumeknop: hoogstens zo vaak (s) het volume naar Spotify sturen
 OVERLAY_SECONDS = 1.5      # zo lang blijft de volumebalk van de knop in beeld
@@ -267,15 +278,23 @@ def parse_night(start, end):
 class Player:
     """Praat met Spotify in achtergrondthreads zodat het scherm nooit hapert."""
 
-    def __init__(self, small_art=False):
+    def __init__(self, small_art=False, sp=None, threads=True):
+        """sp: een kant-en-klare client (zoals de nep-Spotify); threads=False: geen achtergrondthreads,
+        dan voert work() de klussen uit (tests en de browserdemo)."""
         self.small_art = small_art
-        # Heeft het opgeslagen token nog niet alle nieuwe toestemmingen (zoals recent
-        # gespeeld)? Dan draaien we met wat er is, tot je opnieuw inlogt met auth.py.
-        granted = granted_scopes()
-        missing = set(SCOPES.split()) - granted
+        if sp is None:
+            # Heeft het opgeslagen token nog niet alle nieuwe toestemmingen (zoals recent
+            # gespeeld)? Dan draaien we met wat er is, tot je opnieuw inlogt met auth.py.
+            granted = granted_scopes()
+            missing = set(SCOPES.split()) - granted
+            sp = make_client(" ".join(sorted(granted)) if granted and missing else SCOPES)
+        else:
+            granted = set(SCOPES.split())
         self.can_recent = "user-read-recently-played" in granted
         self.can_like = {"user-library-read", "user-library-modify"} <= granted
-        self.sp = make_client(" ".join(sorted(granted)) if granted and missing else SCOPES)
+        self.can_top = "user-top-read" in granted
+        self.top = {}  # (soort, periode) -> (wanneer, lijst); "jouw top" van Spotify
+        self.sp = sp
         self.lock = threading.Lock()
         self.playback = None
         self.fetched_at = 0.0
@@ -287,6 +306,8 @@ class Player:
         self.queue_items = None
         self.search_results = None
         self.recent = None
+        self.me = None           # wie er is ingelogd (naam), voor de accountpagina
+        self.liked_total = None  # hoeveel gelikete nummers (bekend na het openen van de lijst)
         self.liked = {}          # uri -> (geliket?, wanneer gevraagd)
         self._like_busy = set()
         self.artist_page = None  # {"artist", "tracks", "albums"} van de geopende artiest
@@ -305,8 +326,10 @@ class Player:
         self.last_playing = time.monotonic()  # wanneer er voor het laatst iets speelde (voor de diepe slaap)
         self._jobs = queue.Queue()
         self._wake = threading.Event()
-        threading.Thread(target=self._poll_loop, daemon=True).start()
-        threading.Thread(target=self._job_loop, daemon=True).start()
+        self.beat = time.monotonic()  # laatste teken van leven van de Spotify-thread (zie watchdog)
+        if threads:
+            threading.Thread(target=self._poll_loop, daemon=True).start()
+            threading.Thread(target=self._job_loop, daemon=True).start()
 
     def say(self, text, seconds=4):
         with self.lock:
@@ -323,6 +346,7 @@ class Player:
 
     def _poll_loop(self):
         while True:
+            self.beat = time.monotonic()
             if not wait_left():  # laat Spotify ons wachten, dan vragen we ook niets
                 try:
                     self._refresh()
@@ -399,18 +423,32 @@ class Player:
 
     def _job_loop(self):
         while True:
-            fn, args = self._jobs.get()
-            try:
-                fn(*args)
-            except SpotifyException as err:
-                self.say(friendly_error(err))
-            except requests.RequestException:
-                self.say(tr("Geen verbinding met Spotify"))
-            except Exception as err:
-                print(f"Actie mislukt: {err}", flush=True)
-                self.say(tr("Er ging iets mis"))
+            self._do(*self._jobs.get())
             time.sleep(0.4)  # Spotify heeft even nodig voor het de nieuwe stand meldt
             self._wake.set()
+
+    def _do(self, fn, args):
+        try:
+            fn(*args)
+        except SpotifyException as err:
+            self.say(friendly_error(err))
+        except requests.RequestException:
+            self.say(tr("Geen verbinding met Spotify"))
+        except Exception as err:
+            print(f"Actie mislukt: {err}", flush=True)
+            self.say(tr("Er ging iets mis"))
+
+    def work(self):
+        """Voert de wachtende klussen meteen uit, zonder threads (tests en de browserdemo).
+        Geeft True als er iets te doen was."""
+        done = False
+        while True:
+            try:
+                fn, args = self._jobs.get_nowait()
+            except queue.Empty:
+                return done
+            self._do(fn, args)
+            done = True
 
     def _run(self, fn, *args):
         self._jobs.put((fn, args))
@@ -638,6 +676,34 @@ class Player:
 
     # -- lijsten --
 
+    def load_top(self, kind, period):
+        """Je meest beluisterde artiesten of nummers; één verzoek, en dan een uur bewaard."""
+        key = (kind, period)
+        known = self.top.get(key)
+        if known and (known[1] is None or time.monotonic() - known[0] < TOP_KEEP):
+            return  # al bezig, of nog vers
+        self.top[key] = (time.monotonic(), None)
+        self._run(self._load_top, kind, period)
+
+    def _load_top(self, kind, period):
+        fetch = self.sp.current_user_top_artists if kind == "artists" else self.sp.current_user_top_tracks
+        try:
+            items = [i for i in (fetch(limit=20, time_range=period) or {}).get("items") or [] if i]
+        except Exception:
+            self.top.pop((kind, period), None)  # niet half laten staan: de volgende keer opnieuw
+            raise
+        self.top[(kind, period)] = (time.monotonic(), items)
+
+    def top_items(self, kind, period):
+        """De lijst, of None zolang hij laadt."""
+        return (self.top.get((kind, period)) or (0, None))[1]
+
+    def load_me(self):
+        """Wie er is ingelogd; één verzoek, alleen als je de accountpagina opent."""
+        if self.me is None:
+            self.me = {}
+            self._run(lambda: setattr(self, "me", self.sp.current_user() or {}))
+
     def load_devices(self, keep=False):
         if not keep:
             self.devices = None
@@ -705,7 +771,31 @@ class Player:
 
     def load_tracks(self, playlist_id):
         self.tracks, self.tracks_for, self.tracks_hidden = None, playlist_id, False
-        self._run(self._load_tracks, playlist_id)
+        self._run(self._load_liked if playlist_id == LIKED_ID else self._load_tracks, playlist_id)
+
+    def _load_liked(self, _):
+        """Je gelikete nummers, nieuwste eerst; hoogstens LIKED_MAX."""
+        tracks, offset = [], 0
+        while len(tracks) < LIKED_MAX and self.tracks_for == LIKED_ID:
+            page = self.sp.current_user_saved_tracks(limit=50, offset=offset)
+            items = [entry.get("track") for entry in page.get("items") or []]
+            self.liked_total = page.get("total", len(items))
+            tracks += [(offset + i, item) for i, item in enumerate(items)]
+            self.tracks = list(tracks)  # alvast tonen terwijl de rest laadt
+            if not page.get("next") or not items:
+                break
+            offset += len(items)
+
+    def play_tracks(self, uris, position=0):
+        """Een lijst losse nummers afspelen (zoals je likes), vanaf een bepaald nummer."""
+        device_id = self._device().get("id")
+        if not device_id:
+            self.say(tr("Kies eerst een apparaat"))
+            return False
+        if len(uris) > PLAY_MAX:  # Spotify neemt er hoogstens 100: vanaf het gekozen nummer
+            uris, position = uris[position:position + PLAY_MAX], 0
+        self._run(self.sp.start_playback, device_id, None, uris, {"position": position})
+        return True
 
     def _load_tracks(self, playlist_id):
         tracks = []
@@ -879,11 +969,16 @@ class Screen:
         self.share_tab = 0
         self.updates = None       # zie updates.py; None = uit
         self.guest_requests = False  # verzoekjespagina aan?
-        self.update_confirm = False
+        self.update_confirm = None   # "bijwerken" of "terug" terwijl we om bevestiging vragen
+        self.previous_version = None  # bewaarde vorige versie (zie updates.previous)
         self.page_back = {}
         self.page_title = ""
         self.artist_scroll = 0       # artiest/album: naar welk scherm "Terug" gaat
         self.web_port = None     # poort van de webpagina voor instellingen, None = uit
+        self.login = None        # inloggen via je telefoon (login.PhoneLogin), None = niet mogelijk
+        self.top_kind, self.top_period = "artists", 0  # jouw top: artiesten of nummers, en welke periode
+        self.flip_shown = {}     # flipklok: per kaartje (waarde, vorige waarde, wanneer veranderd)
+        self.flip_cache = {}
         self.power_confirm = None  # "reboot" of "poweroff" terwijl we om bevestiging vragen
         wifi_name = os.environ.get("GAST_WIFI_NAAM", "").strip()
         self.wifi = (wifi_name, os.environ.get("GAST_WIFI_WACHTWOORD", "").strip(),
@@ -1406,11 +1501,11 @@ class Screen:
             views = {"devices": self.draw_devices, "playlists": self.draw_playlists,
                      "tracks": self.draw_tracks, "queue": self.draw_queue, "timer": self.draw_timer,
                      "menu": self.draw_menu, "keyboard": self.draw_keyboard, "search": self.draw_search,
-                     "settings": self.draw_settings, "recent": self.draw_recent,
+                     "settings": self.draw_settings, "recent": self.draw_recent, "top": self.draw_top,
                      "set_weer": self.draw_set_weer, "set_rust": self.draw_set_rust,
                      "set_nacht": self.draw_set_nacht, "set_font": self.draw_set_font,
                      "set_taal": self.draw_set_taal, "set_kleur": self.draw_set_kleur,
-                     "set_scherm": self.draw_set_scherm, "info": self.draw_info, "set_power": self.draw_set_power, "set_web": self.draw_set_web, "set_update": self.draw_set_update, "artist": self.draw_artist,
+                     "set_scherm": self.draw_set_scherm, "info": self.draw_info, "set_power": self.draw_set_power, "set_web": self.draw_set_web, "set_account": self.draw_set_account, "set_update": self.draw_set_update, "artist": self.draw_artist,
                      "album": self.draw_album,
                      "lyrics": self.draw_lyrics, "share": self.draw_share, "tour": self.draw_tour}
             now_view = {"rond": self.draw_now_round, "staand": self.draw_now_portrait}.get(self.shape, self.draw_now)
@@ -1668,18 +1763,32 @@ class Screen:
         self.present()
 
     def draw_clock(self):
-        # (y, lettergrootte) voor tijd, datum, weer, regen
-        if self.compact:
-            spots, max_w = ((190, 110), (272, 24), (322, 20), (356, 17)), 380
-        else:
-            spots, max_w = ((175, 150), (280, 28), (350, 24), (392, 20)), 760
+        """Klok met datum en weer. Drie stijlen (instelling klok_stijl): digitaal, analoog en flipklok."""
         now = datetime.now()
-        date = format_date(now)
-        lines = [(now.strftime("%H:%M"), CLOCK, True), (date, CLOCK, False)]
+        style = self.settings.get("klok_stijl", "digitaal")
+        compact = self.compact
+        # per stijl: waar de tijd staat, en (y, lettergrootte) voor datum, weer, regen
+        if style == "analoog":
+            self.draw_analog(now, (self.cx, 176 if compact else 172), 118 if compact else 128)
+            spots = ((326, 22), (356, 18), (382, 15)) if compact else ((338, 26), (378, 22), (410, 18))
+        elif style == "flip":
+            if compact:
+                self.draw_flip(now, top=90, card=(180, 160), gap=16, size=118)
+                spots = ((290, 22), (324, 18), (352, 15))
+            else:
+                self.draw_flip(now, top=70, card=(230, 190), gap=24, size=150)
+                spots = ((306, 28), (352, 24), (390, 20))
+        else:
+            time_spot, spots = (((190, 110), ((272, 24), (322, 20), (356, 17))) if compact
+                                else ((175, 150), ((280, 28), (350, 24), (392, 20))))
+            self.text(now.strftime("%H:%M"), time_spot[1], CLOCK, self.pt(self.cx, time_spot[0]), anchor="center",
+                      bold=True)
+        max_w = 380 if compact else 760
+        lines = [(format_date(now), CLOCK)]
         if self.weather and self.weather.summary:
-            lines += [(self.weather.summary, CLOCK, False), (self.weather.rain, CLOCK_DIM, False)]
-        for (text, color, bold), (y, size) in zip(lines, spots):
-            self.text(text, size, color, self.pt(self.cx, y), anchor="center", max_w=self.px(max_w), bold=bold)
+            lines += [(self.weather.summary, CLOCK), (self.weather.rain, CLOCK_DIM)]
+        for (text, color), (y, size) in zip(lines, spots):
+            self.text(text, size, color, self.pt(self.cx, y), anchor="center", max_w=self.px(max_w))
 
         # Speelt er muziek? Dan klein onderaan wat er speelt.
         pb, _ = self.p.snapshot()
@@ -1688,6 +1797,79 @@ class Screen:
             y, size, w = (410, 16, 300) if self.compact else (446, 18, 700)
             self.text(f"♪ {title} · {subtitle}", size, CLOCK_DIM, self.pt(self.cx, y), anchor="center",
                       max_w=self.px(w))
+
+    def draw_analog(self, now, center, radius):
+        """Wijzerplaat met streepjes, uur- en minuutwijzer, en een secondewijzer in de accentkleur."""
+        c, r = self.pt(*center), self.px(radius)
+        pygame.draw.circle(self.s, CLOCK_DIM, c, r, max(2, self.px(3)))
+        for i in range(60):
+            angle = math.radians(i * 6)
+            long_tick = i % 5 == 0
+            inner = r * (0.86 if long_tick else 0.93)
+            start = (c[0] + math.sin(angle) * inner, c[1] - math.cos(angle) * inner)
+            end = (c[0] + math.sin(angle) * r * 0.97, c[1] - math.cos(angle) * r * 0.97)
+            pygame.draw.line(self.s, CLOCK if long_tick else CLOCK_DIM, start, end,
+                             max(2, self.px(4)) if long_tick else 1)
+
+        def hand(turns, length, width, color):
+            angle = turns * 2 * math.pi
+            end = (c[0] + math.sin(angle) * r * length, c[1] - math.cos(angle) * r * length)
+            pygame.draw.line(self.s, color, c, end, width)
+            pygame.draw.circle(self.s, color, (int(end[0]), int(end[1])), width // 2)
+
+        minutes = now.minute + now.second / 60
+        hand((now.hour % 12 + minutes / 60) / 12, 0.5, max(3, self.px(9)), CLOCK)
+        hand(minutes / 60, 0.78, max(2, self.px(6)), CLOCK)
+        if not self.economy:
+            hand(now.second / 60, 0.86, max(1, self.px(2)), ACCENT)
+        pygame.draw.circle(self.s, ACCENT if not self.economy else CLOCK, c, max(3, self.px(7)))
+
+    def flip_card(self, value, size, w, h):
+        """Een kaartje van de flipklok, met een streep in het midden (bewaard voor hergebruik)."""
+        key = (value, size, w, h)
+        if key not in self.flip_cache:
+            if len(self.flip_cache) > 40:
+                self.flip_cache.clear()
+            card = pygame.Surface((w, h), pygame.SRCALPHA)
+            pygame.draw.rect(card, (42, 42, 42), card.get_rect(), border_radius=max(4, w // 14))
+            digits = self.font(size, True).render(value, True, CLOCK)
+            card.blit(digits, digits.get_rect(center=(w // 2, h // 2)))
+            pygame.draw.line(card, BG, (0, h // 2), (w, h // 2), max(2, self.px(3)))
+            self.flip_cache[key] = card
+        return self.flip_cache[key]
+
+    def draw_flip(self, now, top, card, gap, size):
+        """Uren en minuten op kaartjes die omklappen als de tijd verspringt (niet in de zuinige stand)."""
+        w, h = self.px(card[0]), self.px(card[1])
+        half = h // 2
+        x0 = self.pt(self.cx, top)[0] - w - self.px(gap) // 2
+        y = self.pt(0, top)[1]
+        moment = time.monotonic()
+        for i, value in enumerate((now.strftime("%H"), now.strftime("%M"))):
+            shown, previous, since = self.flip_shown.get(i, (value, None, 0.0))
+            if value != shown:  # net veranderd: omklappen
+                shown, previous, since = value, shown, moment
+                self.flip_shown[i] = (shown, previous, since)
+            elif i not in self.flip_shown:
+                self.flip_shown[i] = (shown, None, 0.0)
+            x = x0 + i * (w + self.px(gap))
+            new = self.flip_card(shown, size, w, h)
+            progress = 1.0 if (self.economy or previous is None) else (moment - since) / FLIP_SECONDS
+            if progress >= 1:
+                self.s.blit(new, (x, y))
+                continue
+            self.animating = True
+            old = self.flip_card(previous, size, w, h)
+            self.s.blit(new, (x, y), pygame.Rect(0, 0, w, half))           # bovenkant: al de nieuwe
+            self.s.blit(old, (x, y + half), pygame.Rect(0, half, w, h - half))  # onderkant: nog de oude
+            if progress < 0.5:  # de oude bovenkant klapt naar beneden
+                flap_h = max(1, int(half * (1 - 2 * progress)))
+                flap = pygame.transform.smoothscale(old.subsurface((0, 0, w, half)), (w, flap_h))
+                self.s.blit(flap, (x, y + half - flap_h))
+            else:  # de nieuwe onderkant valt over de oude heen
+                flap_h = max(1, int((h - half) * (2 * progress - 1)))
+                flap = pygame.transform.smoothscale(new.subsurface((0, half, w, h - half)), (w, flap_h))
+                self.s.blit(flap, (x, y + half))
 
     def draw_now_round(self):
         pb, fetched_at = self.p.snapshot()
@@ -2007,6 +2189,11 @@ class Screen:
         rows = None
         if playlists is not None:
             rows = []
+            if self.p.can_like:
+                total = self.p.liked_total
+                rows.append((self.liked_playlist()["name"], tr("{n} nummers", n=total) if total is not None
+                             else tr("Je likes"), False, lambda: self.pick_playlist(self.liked_playlist())))
+            rows.append(("★ " + tr("Jouw top"), tr("Wat je het meest beluistert"), False, self.open_top))
             for pl in playlists:
                 total = (pl.get("items") or pl.get("tracks") or {}).get("total")
                 owner = (pl.get("owner") or {}).get("display_name") or ""
@@ -2028,7 +2215,9 @@ class Screen:
                 rows.append((item["name"], track_info(item), item.get("uri") == playing_uri,
                              lambda pos=pos: self.pick_track(pos),
                              lambda item=item: self.p.add_to_queue(item)))
-        empty = (tr("Spotify toont alleen de nummers van playlists die van jou zijn.\n"
+        empty = (tr("Nog geen gelikete nummers. Tik op het hartje bij een nummer om het te liken.")
+                 if pl["id"] == LIKED_ID else
+                 tr("Spotify toont alleen de nummers van playlists die van jou zijn.\n"
                     "Tik op Speel alles om hem toch te starten.") if self.p.tracks_hidden
                  else tr("Deze playlist is leeg."))
         self.draw_list(pl["name"], rows, empty, button=(tr("Speel alles"), self.play_playlist),
@@ -2192,6 +2381,7 @@ class Screen:
                 (tr("Scherm"), tr(dict(ROTATIONS)[s["draaien"]]), False, lambda: self.open_setting("set_scherm")),
                 (tr("Info"), self.system_info()[0][1], False, lambda: self.open_setting("info")),
                 (tr("Via je telefoon"), self.web_url() or tr("Uit"), False, lambda: self.open_setting("set_web")),
+                (tr("Spotify-account"), self.account_name() or tr("Wie er is ingelogd"), False, self.open_account),
                 (tr("Bijwerken"), self.update_summary(), False, lambda: self.open_setting("set_update")),
                 (tr("Aan/uit"), tr("Herstarten of uitzetten"), False, lambda: self.open_setting("set_power")),
                 (tr("Rondleiding"), tr("Uitleg over het scherm"), False, self.start_tour)]
@@ -2247,18 +2437,24 @@ class Screen:
                    else tr("Altijd de klok met het weer."))
         set_what = lambda v: self.change_setting("rust_scherm", v)
         set_idle = lambda v: self.change_setting("idle_min", v)
+        styles = [(key, tr(label)) for key, label in CLOCK_STYLES]
+        set_style = lambda v: self.change_setting("klok_stijl", v)
         if self.compact:
             self.text(tr("Wat laten zien"), 15, MUTED, self.pt(240, 98), anchor="center")
             self.choices(what, s["rust_scherm"], set_what, (130, 112, 106, 48, 8), 2, 18)
             self.text(explain, 13, MUTED, self.pt(240, 180), anchor="center", max_w=self.px(300))
             self.text(tr("Na hoeveel minuten"), 15, MUTED, self.pt(240, 204), anchor="center")
             self.choices(minutes, s["idle_min"], set_idle, (91, 218, 70, 46, 6), 4, 16)
+            self.text(tr("Klok"), 15, MUTED, self.pt(240, 334), anchor="center")
+            self.choices(styles, s.get("klok_stijl", "digitaal"), set_style, (96, 348, 92, 42, 6), 3, 15)
         else:
             self.text(tr("Wat laten zien"), 18, MUTED, self.pt(400, 92), anchor="center")
             self.choices(what, s["rust_scherm"], set_what, (220, 108, 172, 56, 16), 2, 22)
             self.text(explain, 16, MUTED, self.pt(400, 190), anchor="center", max_w=self.px(700))
             self.text(tr("Na hoeveel minuten zonder aanraken"), 18, MUTED, self.pt(400, 232), anchor="center")
             self.choices(minutes, s["idle_min"], set_idle, (90, 254, 145, 56, 12), 4, 20)
+            self.text(tr("Klok"), 18, MUTED, self.pt(400, 398), anchor="center")
+            self.choices(styles, s.get("klok_stijl", "digitaal"), set_style, (175, 414, 140, 50, 10), 3, 19)
 
     def draw_set_nacht(self):
         self.setting_page("Nachtmodus")
@@ -2369,6 +2565,7 @@ class Screen:
         temp = cpu_temperature()
         last_ok = self.p.last_ok
         spotify = tr("verbonden") if last_ok and now - last_ok < 30 else tr("geen verbinding")
+        requests_hour, requests_today, requests_yesterday = counter.counts()  # zie common.RequestCounter
         dw, dh = self.display.get_size()
         shape = {"rechthoek": "liggend", "staand": "staand", "rond": "rond"}[self.shape]
         self._info = [
@@ -2377,6 +2574,8 @@ class Screen:
             (tr("Wifi"), wifi),
             (tr("Temperatuur"), f"{temp:.0f} °C" if temp is not None else tr("onbekend")),
             ("Spotify", spotify),
+            (tr("Verzoeken vandaag"), tr("{today} (gisteren {yesterday})", today=requests_today, yesterday=requests_yesterday)),
+            (tr("Verzoeken dit uur"), str(requests_hour)),
             (tr("Scherm"), f"{dw}×{dh} · {tr(shape)}"),
             (tr("Draait al"), duration_text(now - self.started)),
             (tr("Versie"), APP_VERSION),
@@ -2406,6 +2605,8 @@ class Screen:
             {"key": "weer_plaats", "type": "text", "label": tr("Weer"), "placeholder": tr("Plaats, bijv. Utrecht")},
             {"key": "rust_scherm", "type": "choice", "label": tr("Rustscherm"),
              "options": [("hoes", tr("Hoes")), ("klok", tr("Klok"))]},
+            {"key": "klok_stijl", "type": "choice", "label": tr("Klok"),
+             "options": [(key, tr(label)) for key, label in CLOCK_STYLES]},
             {"key": "idle_min", "type": "choice", "label": tr("Na hoeveel minuten zonder aanraken"),
              "options": [(m, tr("na {minutes} min", minutes=m) if m else tr("Nooit")) for m in IDLE_OPTIONS]},
             {"key": "nacht_stijl", "type": "choice", "label": night,
@@ -2441,6 +2642,80 @@ class Screen:
             if str(option) == value:
                 return option
         return None
+
+    # -- Spotify-account: wie er is ingelogd, en opnieuw inloggen via je telefoon (zie login.py) --
+
+    def account_name(self):
+        me = self.p.me if self.p else None
+        return (me or {}).get("display_name") or (me or {}).get("id")
+
+    def open_account(self):
+        self.p.load_me()
+        self.open_setting("set_account")
+
+    def relogin(self):
+        self.login.open()
+        self.p.say(tr("Scan de code met je telefoon"), 3)
+
+    def draw_login_qr(self, center, size, lines_at, max_w):
+        """QR-code naar /inloggen met uitleg eronder. Zonder netwerk: hoe het via SSH kan."""
+        url = self.web_url()
+        if url and self.login:
+            link = url + "/inloggen"
+            if self.qr.available:
+                code = self.qr.get(link, self.px(size))
+                self.s.blit(code, code.get_rect(center=self.pt(*center)))
+            lines = [(tr("Scan met je telefoon om in te loggen"), TEXT), (link, MUTED),
+                     (tr("Je telefoon moet op hetzelfde wifi-netwerk zitten."), MUTED)]
+        else:
+            lines = [(tr("Log in via SSH op de Pi:"), TEXT),
+                     ("cd ~/spotify-scherm && .venv/bin/python app/auth.py", MUTED)]
+        x, y, step = lines_at
+        for i, (text, color) in enumerate(lines):
+            self.paragraph(text, 18 if color == TEXT else 15, color, self.pt(x, y + i * step), self.px(max_w))
+
+    def draw_login_wait(self):
+        """Voor het eerste inloggen: scan de code, of log in via SSH."""
+        self.s.fill(BG)
+        title = tr("Nog niet ingelogd bij Spotify")
+        if self.compact:
+            self.text(title, 24, TEXT, self.pt(self.cx, 60 if self.round else 0), anchor="center", bold=True)
+            self.draw_login_qr((self.cx, 190 if self.round else 200), 180 if self.round else 260,
+                               (self.cx, 312 if self.round else 380, 34), 320 if self.round else 420)
+        else:
+            self.text(title, 28, TEXT, self.pt(self.cx, 50), anchor="center", bold=True)
+            self.draw_login_qr((210, 260), 300, (575, 190, 56), 400)
+        self.present()
+
+    def draw_set_account(self):
+        self.setting_page("Spotify-account")
+        name = self.account_name()
+        line = tr("Ingelogd als {name}", name=name) if name else tr("Even kijken wie er is ingelogd…")
+        if self.login and self.login.minutes_left():
+            # opnieuw inloggen staat open: de QR-code naar de telefoonpagina
+            info = tr("Opnieuw inloggen staat {minutes} min open", minutes=self.login.minutes_left())
+            if self.compact:
+                self.text(info, 15, ACCENT, self.pt(self.cx, 92 if self.round else 10), anchor="center",
+                          max_w=self.px(320))
+                self.draw_login_qr((self.cx, 200), 150 if self.round else 220, (self.cx, 300 if self.round else 340, 30),
+                                   300 if self.round else 420)
+            else:
+                self.text(info, 18, ACCENT, self.pt(self.cx, 76), anchor="center")
+                self.draw_login_qr((210, 270), 280, (575, 190, 56), 400)
+            self.animating = True  # minuten aftellen
+            return
+        if self.compact:
+            text_pos, max_w, box, size = (240, 150), 320, (120, 230, 240, 56), 18
+        else:
+            text_pos, max_w, box, size = (400, 140), 680, (220, 240, 360, 70), 22
+        self.paragraph(line, size + 2, TEXT, self.pt(*text_pos), self.px(max_w))
+        if self.login:
+            self.paragraph(tr("Met een ander account inloggen? Daarna start de app opnieuw."), size - 4, MUTED,
+                           self.pt(text_pos[0], text_pos[1] + 44), self.px(max_w))
+            self.pill(self.rect(*box), tr("Opnieuw inloggen"), self.relogin, active=True, size=size)
+        else:
+            self.paragraph(tr("Opnieuw inloggen kan via SSH: .venv/bin/python app/auth.py"), size - 4, MUTED,
+                           self.pt(text_pos[0], text_pos[1] + 44), self.px(max_w))
 
     def draw_set_web(self):
         self.setting_page("Via je telefoon")
@@ -2484,11 +2759,16 @@ class Screen:
 
     def draw_set_update(self):
         self.setting_page("Bijwerken")
-        u = self.updates
-        if self.compact:
-            text_y, step, max_w, boxes, size = 130, 34, 330, ((140, 270, 200, 52), (140, 332, 200, 52)), 18
+        u, prev, confirm = self.updates, self.previous_version, self.update_confirm
+        if self.shape == "rond":  # "‹ Terug" staat onderaan (y 404): alles erboven
+            text_y, step, max_w, size = 108, 30, 320, 16
+            boxes = ((140, 250, 200, 44), (140, 300, 200, 44), (130, 352, 220, 40))
+        elif self.compact:
+            text_y, step, max_w, size = 120, 32, 330, 17
+            boxes = ((140, 262, 200, 50), (140, 320, 200, 50), (120, 378, 240, 46))
         else:
-            text_y, step, max_w, boxes, size = 120, 40, 680, ((120, 330, 260, 72), (420, 330, 260, 72)), 22
+            text_y, step, max_w, size = 110, 38, 680, 22
+            boxes = ((120, 300, 260, 64), (420, 300, 260, 64), (220, 384, 360, 56))
         lines = [(tr("Deze versie: {version}", version=APP_VERSION), TEXT)]
         if not u:
             lines.append((tr("Controleren staat uit (SPOTISCHERM_UPDATES=0)."), MUTED))
@@ -2498,35 +2778,64 @@ class Screen:
             lines.append((tr("Nieuw: {name}", name=u.latest["name"]), ACCENT))
         else:
             lines.append((tr("Je hebt de nieuwste versie."), MUTED))
-        if self.update_confirm:
+        if prev:
+            lines.append((tr("Vorige versie bewaard: {version}", version=prev["versie"]), MUTED))
+        if confirm == "bijwerken":
             lines.append((tr("Bijwerken en de app herstarten?"), TEXT))
+        elif confirm == "terug":
+            lines.append((tr("Terug naar versie {version}? De app start opnieuw.", version=prev["versie"]), TEXT))
         for i, (line, color) in enumerate(lines):
             self.paragraph(line, size, color, self.pt(self.cx, text_y + i * step), self.px(max_w))
-        if not u:
+        cancel = lambda: setattr(self, "update_confirm", None)
+        if confirm:
+            yes = (tr("Ja, bijwerken"), self.run_update) if confirm == "bijwerken" else (tr("Ja, terugzetten"), self.run_restore)
+            self.pill(self.rect(*boxes[0]), yes[0], yes[1], active=True, size=size)
+            self.pill(self.rect(*boxes[1]), tr("Annuleer"), cancel, size=size)
             return
-        if self.update_confirm:
-            self.pill(self.rect(*boxes[0]), tr("Ja, bijwerken"), self.run_update, active=True, size=size)
-            self.pill(self.rect(*boxes[1]), tr("Annuleer"), lambda: setattr(self, "update_confirm", False), size=size)
-        else:
-            if u.available:
-                self.pill(self.rect(*boxes[0]), tr("Bijwerken"), lambda: setattr(self, "update_confirm", True),
-                          active=True, size=size)
+        if u and u.available:
+            self.pill(self.rect(*boxes[0]), tr("Bijwerken"), lambda: setattr(self, "update_confirm", "bijwerken"),
+                      active=True, size=size)
+        if u:
             self.pill(self.rect(*boxes[1]), tr("Nu controleren"), self.check_updates, size=size)
+        if prev:
+            self.pill(self.rect(*boxes[2]), tr("Vorige versie terugzetten"),
+                      lambda: setattr(self, "update_confirm", "terug"), size=size - 2, fg=MUTED)
 
     def check_updates(self):
         self.updates.check_now()
         self.p.say(tr("Bezig met controleren…"), 2)
 
+    def run_restore(self):
+        """Terug naar de bewaarde vorige versie (zie updates.restore), en dan herstarten."""
+        self.update_confirm = None
+        version = self.previous_version["versie"]
+        self.draw_message(tr("Terugzetten naar {version}…", version=version), [tr("Even geduld, dit duurt een paar seconden.")])
+        try:
+            restore()
+        except Exception as err:
+            print(f"Terugzetten mislukt: {err}", flush=True)
+            self.p.say(tr("Terugzetten mislukt."), 6)
+            return
+        self.previous_version = None
+        self.draw_message(tr("Teruggezet naar {version}", version=version), [tr("De app herstart…")])
+        if sys.platform.startswith("linux"):
+            subprocess.run(["sudo", "-n", "systemctl", "restart", "spotischerm"], capture_output=True, timeout=30)
+        self.p.say(tr("Herstart de app om de vorige versie te gebruiken."), 8)
+
     def run_update(self):
-        self.update_confirm = False
+        self.update_confirm = None
         version = self.updates.latest["version"]
         self.draw_message(tr("Bijwerken naar {version}…", version=version), [tr("Even geduld, dit duurt een paar seconden.")])
+        watchdog.start(UPDATE_TIME)  # een trage download mag geen herstart midden in het bijwerken geven
         try:
             _, needs_install = self.updates.install()
+            self.previous_version = previous()  # de versie van zonet staat nu klaar om terug te zetten
         except Exception as err:  # netwerk weg, schijf vol, rare zip...
             print(f"Bijwerken mislukt: {err}", flush=True)
             self.p.say(tr("Bijwerken mislukt. Probeer het later opnieuw."), 6)
             return
+        finally:
+            watchdog.start()
         if needs_install:
             # Nieuwe pakketten nodig: dat moet met je wachtwoord, dus niet zelf herstarten.
             self.p.say(tr("Bijgewerkt. Voer op de Pi nog één keer bash install.sh uit en herstart."), 12)
@@ -2836,6 +3145,54 @@ class Screen:
         self.p.load_playlists(keep=True)  # oude lijst blijft staan tot de nieuwe binnen is
         self.view, self.scroll = "playlists", 0
 
+    def open_top(self):
+        self.top_return = self.view
+        self.view, self.scroll = "top", 0
+        self.load_top()
+
+    def load_top(self):
+        if self.p.can_top:
+            self.p.load_top(self.top_kind, TOP_RANGES[self.top_period][0])
+
+    def switch_top_kind(self):
+        self.top_kind = "tracks" if self.top_kind == "artists" else "artists"
+        self.scroll = 0
+        self.load_top()
+
+    def switch_top_period(self):
+        self.top_period = (self.top_period + 1) % len(TOP_RANGES)
+        self.scroll = 0
+        self.load_top()
+
+    def draw_top(self):
+        """Jouw top: je meest beluisterde artiesten of nummers, per periode (zie Player.load_top)."""
+        period, period_name = TOP_RANGES[self.top_period]
+        artists = self.top_kind == "artists"
+        title = tr("Jouw top") + " · " + (tr("Artiesten") if artists else tr("Nummers"))
+        button = (tr("Nummers") if artists else tr("Artiesten"), self.switch_top_kind)
+        back = lambda: setattr(self, "view", getattr(self, "top_return", "playlists"))
+        if not self.p.can_top:
+            self.draw_list(tr("Jouw top"), [], tr("Log één keer opnieuw in om je top te zien: "
+                                                 "Instellingen → Spotify-account → Opnieuw inloggen."), back=back)
+            return
+        items = self.p.top_items(self.top_kind, period)
+        rows = None
+        if items is not None:
+            pb, _ = self.p.snapshot()
+            playing_uri = ((pb or {}).get("item") or {}).get("uri")
+            rows = [(tr("Periode: {period}", period=tr(period_name)), tr("Tik om te wisselen"), True,
+                     self.switch_top_period)]
+            for n, item in enumerate(items, 1):
+                if artists:
+                    rows.append((f"{n}. {item['name']}", tr("Artiest"), False,
+                                 lambda a=item: self.open_artist(a["id"], a["name"])))
+                else:
+                    rows.append((f"{n}. {item['name']}", track_info(item), item.get("uri") == playing_uri,
+                                 lambda t=item: self.pick_result("track", t), lambda t=item: self.p.add_to_queue(t)))
+            if not items:
+                rows.append((tr("Nog te weinig geluisterd in deze periode."), "", False, self.switch_top_period))
+        self.draw_list(title, rows, "", button=button, back=back)
+
     def open_recent(self):
         self.p.load_recent()
         self.view, self.scroll = "recent", 0
@@ -2942,7 +3299,9 @@ class Screen:
         self.view, self.scroll = "settings", 0
 
     def open_setting(self, page):
-        self.view, self.power_confirm, self.update_confirm = page, None, False
+        self.view, self.power_confirm, self.update_confirm = page, None, None
+        if page == "set_update":
+            self.previous_version = previous()  # één keer lezen, niet bij elk beeld
 
     def apply_settings(self):
         s = self.settings
@@ -2984,9 +3343,13 @@ class Screen:
         self.p.transfer(d["id"])
         self.back()
 
+    @staticmethod
+    def liked_playlist():
+        return {"id": LIKED_ID, "name": "♥ " + tr("Gelikete nummers"), "uri": None}
+
     def pick_playlist(self, pl):
         self.playlist, self.playlist_scroll = pl, self.scroll
-        if self.p.tracks_for != pl["id"]:
+        if self.p.tracks_for != pl["id"] or pl["id"] == LIKED_ID:  # likes kunnen intussen veranderd zijn
             self.p.load_tracks(pl["id"])
         self.view, self.scroll = "tracks", 0
 
@@ -2997,8 +3360,14 @@ class Screen:
         self.pick_track(None)
 
     def pick_track(self, position):
-        # In de context van de playlist, zodat hij daarna gewoon doorspeelt.
-        if self.p.play_context(self.playlist["uri"], position):
+        if self.playlist["id"] == LIKED_ID:  # losse nummers: de hele lijst, vanaf het gekozen nummer
+            uris = [item["uri"] for _, item in self.p.tracks or [] if item]
+            if not uris:
+                return
+            started = self.p.play_tracks(uris, position or 0)
+        else:  # in de context van de playlist, zodat hij daarna gewoon doorspeelt
+            started = self.p.play_context(self.playlist["uri"], position)
+        if started:
             self.back()
         else:
             self.open_devices()
@@ -3032,7 +3401,7 @@ class Screen:
             return
         if not self.press or self.view in ("now", "menu", "timer", "keyboard",
                                               "set_weer", "set_rust", "set_nacht", "set_font", "set_taal",
-                                              "set_kleur", "set_scherm", "info", "share", "set_power", "set_web", "set_update",
+                                              "set_kleur", "set_scherm", "info", "share", "set_power", "set_web", "set_update", "set_account",
                                               "tour"):
             return
         dy = pos[1] - self.press[0][1]
@@ -3133,6 +3502,7 @@ def main():
         "nacht_van": night_from or "23:00",
         "nacht_tot": night_to or "07:00",
         "rust_scherm": os.environ.get("RUST_SCHERM", "hoes").strip().lower(),
+        "klok_stijl": os.environ.get("KLOK_STIJL", "digitaal").strip().lower(),
         "taal": os.environ.get("TAAL", "nl").strip().lower(),
         "lettertype": os.environ.get("LETTERTYPE", "standaard").strip().lower(),
         "kleur": os.environ.get("KLEUR", "groen").strip().lower(),
@@ -3147,6 +3517,8 @@ def main():
         settings["nacht_stijl"] = "rood"
     if settings["rust_scherm"] not in ("klok", "hoes"):
         settings["rust_scherm"] = "hoes"
+    if settings["klok_stijl"] not in dict(CLOCK_STYLES):
+        settings["klok_stijl"] = "digitaal"
     if settings["taal"] not in LANGUAGES:
         settings["taal"] = "nl"
     if settings["lettertype"] not in FONT_NAMES:
@@ -3168,16 +3540,36 @@ def main():
 
     ui.draw_splash()
     ui.present()
-    while not CACHE_PATH.exists():
-        ui.draw_message(tr("Nog niet ingelogd bij Spotify"),
-                        [tr("Log in via SSH op de Pi:"), "cd ~/spotify-scherm && .venv/bin/python app/auth.py"])
-        if quit_requested():
-            return
-        time.sleep(1)
-
-    ui.p = Player(small_art=economy)
+    watchdog.start()  # zelfherstel: loopt de app vanaf nu vast, dan herstart systemd hem
+    # Nep-Spotify: de app proberen zonder Spotify-account en zonder quotum (zie nepspotify.py).
+    fake = os.environ.get("SPOTISCHERM_NEP_SPOTIFY", "").strip() == "1"
+    # De telefoonpagina start al vóór het inloggen: daar kun je inloggen (zie login.py).
     web = None
     port = int(os.environ.get("SPOTISCHERM_WEB_POORT", "8080").strip() or 0)
+    ui.login = PhoneLogin() if port and not fake else None
+    if port:
+        web = SettingsServer(port, ui.web_describe, ui.web_validate, None, ui.login)
+        web.start()
+        ui.web_port = port
+    while not fake and not CACHE_PATH.exists():
+        ui.draw_login_wait()
+        watchdog.alive()
+        if web:
+            web.take_shot(ui.s, png_bytes)  # schermafdruk werkt ook nu al
+        if quit_requested():
+            return
+        time.sleep(0.5)
+    if ui.login:
+        ui.login.done = False  # het eerste inloggen is klaar; vanaf nu betekent done: opnieuw ingelogd
+
+    if fake:
+        from lyrics import Lyrics
+        from nepspotify import FakeSpotify, lyrics_for
+        ui.p = Player(small_art=economy, sp=FakeSpotify())
+        ui.lyrics.get = lambda item: Lyrics(synced=lyrics_for(item))
+        print("Nep-Spotify: verzonnen muziek, er gaat niets naar Spotify", flush=True)
+    else:
+        ui.p = Player(small_art=economy)
     if os.environ.get("SPOTISCHERM_UPDATES", "1").strip() != "0":
         ui.updates = Updates(APP_VERSION)
     guests = None
@@ -3188,10 +3580,8 @@ def main():
             now = staticmethod(lambda: ui.p.now_text())
         guests = Guests()
         ui.guest_requests = True
-    if port:
-        web = SettingsServer(port, ui.web_describe, ui.web_validate, guests)
-        web.start()
-        ui.web_port = port
+    if web:
+        web.guests = guests
     ui.hw = Hardware()
     if ui.hw.motion:
         ui.away_after = float(os.environ.get("SPOTISCHERM_BEWEGING_MIN", "10") or 10) * 60
@@ -3210,6 +3600,13 @@ def main():
             changed = True
         if changed:
             ui.p.say(tr("Instellingen aangepast via je telefoon"), 3)
+        if ui.login and ui.login.done:  # via de telefoon opnieuw ingelogd: met het nieuwe account verder
+            ui.login.done = False
+            ui.draw_message(tr("Ingelogd"), [tr("De app start opnieuw met het nieuwe account…")])
+            if sys.platform.startswith("linux"):
+                time.sleep(2)
+                return  # systemd start de app opnieuw (Restart=always)
+            ui.p.say(tr("Herstart de app om het nieuwe account te gebruiken."), 8)
         while True:  # volumeknop en bewegingssensor
             try:
                 ui.hardware_event(ui.hw.events.get_nowait())
@@ -3264,6 +3661,10 @@ def main():
         ui.draw()
         if web:
             web.take_shot(ui.s, png_bytes)
+        # Zelfherstel: alleen "ik leef" melden als ook de Spotify-thread nog draait. Hangt die
+        # (zoals bij het quotum in oktober), dan herstart systemd de app.
+        if time.monotonic() - ui.p.beat < POLL_DEAD:
+            watchdog.alive()
         ui.frame_ms = ui.frame_ms * 0.9 + (time.perf_counter() - started) * 100  # gemiddelde in ms
         ui.fps = clock.get_fps()
         # Alleen snel tekenen als iemand het scherm aanraakt: scheelt veel CPU op de Pi,
