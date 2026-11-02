@@ -36,7 +36,7 @@ MUTED = (160, 160, 160)
 CLOCK = (130, 130, 130)
 CLOCK_DIM = (95, 95, 95)
 ACCENT = (30, 215, 96)     # wordt per beeld gezet uit de instelling "kleur"
-APP_VERSION = "1.4"
+APP_VERSION = "1.4.1"
 TOAST = (80, 80, 80)
 
 BASE_W, BASE_H = 800, 480   # rechthoekig ontwerp
