@@ -30,7 +30,17 @@ jobs:
         run: pip install pytest pygame requests spotipy segno
 
       - name: Tests (fake Spotify, no screen)
-        run: python -m pytest -q tests
+        shell: bash
+        run: |
+          set +e
+          python -m pytest -q -rf --tb=short tests 2>&1 | tee pytest.log
+          status=${PIPESTATUS[0]}
+          if [ "$status" != "0" ]; then
+            # De fouten ook als melding bovenaan het overzicht, zodat je ze ziet zonder het logboek te openen.
+            msg=$(grep -E "^(FAILED|ERROR)|^E |Error" pytest.log | head -40 | sed 's/%/%25/g' | awk 'BEGIN { ORS = "%0A" } { print }')
+            echo "::error title=Tests mislukt::$msg"
+          fi
+          exit $status
         env:
           SDL_VIDEODRIVER: dummy
           SDL_AUDIODRIVER: dummy
