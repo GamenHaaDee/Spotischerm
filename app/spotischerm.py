@@ -13,9 +13,10 @@ import pygame
 import requests
 from spotipy.exceptions import SpotifyException
 
-from common import (CACHE_PATH, SCOPES, granted_scopes, load_config, load_settings, make_client,
+from common import (CACHE_PATH, SCOPES, granted_scopes, load_config, load_settings, make_client, wait_left,
                     save_settings)
 from discovery import LocalDevices, norm
+from hardware import Hardware
 import fonts
 from i18n import LANGUAGES, month, set_language, tr, weekday
 from lyrics import LyricsCache
@@ -33,12 +34,17 @@ MUTED = (160, 160, 160)
 CLOCK = (130, 130, 130)
 CLOCK_DIM = (95, 95, 95)
 ACCENT = (30, 215, 96)     # wordt per beeld gezet uit de instelling "kleur"
-APP_VERSION = "1.2"
+APP_VERSION = "1.3"
 TOAST = (80, 80, 80)
 
 BASE_W, BASE_H = 800, 480   # rechthoekig ontwerp
 ROUND_BASE = 480            # rond ontwerp: een cirkel van 480 breed
-POLL_SECONDS = 2.0
+POLL_SECONDS = 2.0         # zo vaak vragen wat er speelt terwijl je het scherm gebruikt, ...
+POLL_PAUSED = 5            # ... en als er niets speelt
+POLL_REST = (15, 30)       # op het rustscherm: (er speelt iets, niets)
+POLL_SLEEP = 60            # 's nachts zwart of niemand in de kamer
+DEEP_SLEEP_AFTER = 30 * 60 # diepe slaap: speelt er zo lang (s) niets en gebruik je het scherm niet, ...
+POLL_DEEP = 300            # ... dan nog maar zo vaak (s) vragen
 FPS = 24                    # tijdens aanraken
 CALM_FPS = 5                # als niemand het scherm aanraakt
 MARQUEE_FPS = 24            # terwijl een lange titel schuift
@@ -65,11 +71,15 @@ SLEEP_OPTIONS = (15, 30, 45, 60, 90, 120)
 DEVICES_REFRESH = 5        # apparatenlijst: elke zoveel seconden verversen
 IDLE_OPTIONS = (1, 2, 5, 10, 15, 30, 60, 0)   # minuten tot de klok; 0 = nooit
 NIGHT_STEP = 30            # nachttijden verschuiven per zoveel minuten
-LIKE_REFRESH = 60          # zo vaak (seconden) opnieuw vragen of het nummer geliket is
+LIKE_REFRESH = 300         # zo vaak (seconden) opnieuw vragen of het nummer geliket is
 INFO_REFRESH = 5           # info-pagina: zo vaak (seconden) IP, wifi en temperatuur opnieuw lezen
 SCROLLBAR_GUTTER = 30      # breedte van de strook rechts naast lange lijsten, voor de scrollbalk
+CLEAN_SECONDS = 30         # schoonmaakstand: zo lang doet aanraken niets
 SPLASH_MIN = 1.5           # opstartscherm: minstens zo lang (s), ...
 SPLASH_MAX = 20            # ... en hoogstens zo lang als Spotify niet antwoordt
+KNOB_STEP = 3              # volumeknop: zoveel procent per klik
+KNOB_SEND = 0.35           # volumeknop: hoogstens zo vaak (s) het volume naar Spotify sturen
+OVERLAY_SECONDS = 1.5      # zo lang blijft de volumebalk van de knop in beeld
 SWIPE_MIN = 90             # zo ver (ontwerp-pixels) moet je opzij vegen voor een veeggebaar
 
 ACCENTS = (("groen", "Groen", (30, 215, 96)), ("blauw", "Blauw", (64, 156, 255)),
@@ -142,7 +152,7 @@ def friendly_error(err):
     if status == 403:
         return tr("Niet toegestaan (Premium nodig, of het apparaat blokkeert dit)")
     if status == 429:
-        return tr("Te veel verzoeken, even wachten")
+        return tr("Spotify laat de app even wachten (nog {wait})", wait=duration_text(wait_left() + 59))
     return tr("Spotify-fout {status}", status=status)
 
 
@@ -291,6 +301,8 @@ class Player:
         self.sleep_at = None
         self._fade_from = None
         self._hold_until = 0.0
+        self.pace = "actief"     # actief, rust of slaap: bepaalt hoe vaak we Spotify iets vragen
+        self.last_playing = time.monotonic()  # wanneer er voor het laatst iets speelde (voor de diepe slaap)
         self._jobs = queue.Queue()
         self._wake = threading.Event()
         threading.Thread(target=self._poll_loop, daemon=True).start()
@@ -311,20 +323,64 @@ class Player:
 
     def _poll_loop(self):
         while True:
-            try:
-                self._refresh()
-            except Exception as err:  # wifi weg, token verlopen, ...
-                print(f"Verversen mislukt: {err}", flush=True)
+            if not wait_left():  # laat Spotify ons wachten, dan vragen we ook niets
+                try:
+                    self._refresh()
+                except Exception as err:  # wifi weg, token verlopen, ...
+                    print(f"Verversen mislukt: {err}", flush=True)
             try:
                 self._sleep_tick()
             except Exception as err:
                 print(f"Slaaptimer: {err}", flush=True)
-            self._wake.wait(POLL_SECONDS)
+            self._wake.wait(self.poll_interval())
             self._wake.clear()
+
+    def poll_interval(self):
+        """Hoe lang tot de volgende vraag aan Spotify. Alleen vaak als je het scherm gebruikt;
+        op het rustscherm en 's nachts veel minder, maar wel net na het einde van het nummer."""
+        left = wait_left()
+        if left:
+            return min(left + 1, 60)
+        if self.sleep_at is not None:
+            return POLL_SECONDS  # de slaaptimer laat het volume zacht weglopen
+        pb, fetched_at = self.snapshot()
+        playing = bool(pb and pb.get("is_playing"))
+        if self.deep_sleep():
+            return POLL_DEEP
+        if self.pace == "actief":
+            interval = POLL_SECONDS if playing else POLL_PAUSED
+        elif self.pace == "rust":
+            interval = POLL_REST[0] if playing else POLL_REST[1]
+        else:
+            interval = POLL_SLEEP
+        item = (pb or {}).get("item")
+        if playing and item and item.get("duration_ms"):
+            until_end = (item["duration_ms"] - current_progress(pb, fetched_at)) / 1000
+            interval = min(interval, max(POLL_SECONDS, until_end + 1))
+        return interval
+
+    def deep_sleep(self):
+        """Al een halfuur speelt er niets en niemand gebruikt het scherm: nog maar eens per 5 minuten vragen."""
+        pb, _ = self.snapshot()
+        playing = bool(pb and pb.get("is_playing"))
+        return (not playing and self.pace != "actief"
+                and time.monotonic() - self.last_playing > DEEP_SLEEP_AFTER)
+
+    def set_pace(self, pace):
+        """Het scherm meldt of je het gebruikt. Ga je het weer gebruiken, of komt er iemand de kamer in
+        (van slaap naar rust), dan meteen verversen, ook uit de diepe slaap."""
+        order = {"slaap": 0, "rust": 1, "actief": 2}
+        if pace != self.pace:
+            livelier = order[pace] > order[self.pace]
+            self.pace = pace
+            if livelier:
+                self._wake.set()
 
     def _refresh(self):
         pb = self.sp.current_playback(additional_types="episode")
         self.last_ok = time.monotonic()
+        if pb and pb.get("is_playing"):
+            self.last_playing = self.last_ok
         if time.monotonic() < self._hold_until:
             return
         with self.lock:
@@ -396,6 +452,29 @@ class Player:
             device_id = self._device().get("id")
         self.hold()
         self._run(self.sp.seek_track, int(ms), device_id)
+
+    def nudge_volume(self, delta):
+        """Volumeknop: meteen tonen, en het nieuwe volume pas versturen via flush_volume()."""
+        with self.lock:
+            device = self._device()
+            volume = device.get("volume_percent")
+            if volume is None or not device.get("supports_volume", True):
+                return None
+            volume = max(0, min(100, volume + delta))
+            device["volume_percent"] = volume
+            self._volume_target = volume
+        self.hold(2)
+        return volume
+
+    def flush_volume(self):
+        """Het laatste knopvolume versturen; draai je snel, dan gaan de tussenstanden niet allemaal weg."""
+        target = getattr(self, "_volume_target", None)
+        now = time.monotonic()
+        if target is None or now - getattr(self, "_volume_sent", 0.0) < KNOB_SEND or not self._jobs.empty():
+            return
+        self._volume_target, self._volume_sent = None, now
+        self.hold(2)
+        self._run(self.sp.volume, target, self._device().get("id"))
 
     def set_volume(self, volume):
         with self.lock:
@@ -755,6 +834,12 @@ class Screen:
         self.rotation = None
         self.started = time.monotonic()
         self.booting = True      # opstartscherm tot Spotify voor het eerst antwoordt
+        self.clean_until = 0.0   # schoonmaakstand tot dit moment (time.monotonic)
+        self.tour_step = 0       # rondleiding: welke stap
+        self.hw = None           # volumeknop en bewegingssensor (zie hardware.py)
+        self.last_motion = time.monotonic()
+        self.away_after = math.inf  # zonder beweging zo lang (s): scherm zwart
+        self.overlay = None      # (soort, waarde, tot wanneer): volumebalk of afspeelteken van de knop
         self._info, self._info_at = None, 0.0
         self.cover_accent = None
         self.p = None
@@ -763,6 +848,7 @@ class Screen:
         self.settings = settings
         self.weather = weather
         self.fonts = {}
+        self.glyphs = {}  # (lettertype, teken) -> of het lettertype dat teken heeft
         self.text_cache = {}
         self.kb = None           # toetsenbord: {titel, tekst, knop, bij klaar, terug naar}
         self.search_query = ""
@@ -828,6 +914,7 @@ class Screen:
             self.mask.fill((0, 0, 0, 255))
             pygame.draw.circle(self.mask, (0, 0, 0, 0), self.pt(240, 240), self.px(240))
         self.fonts.clear()
+        self.glyphs.clear()
         self.text_cache.clear()
         self.art_key = "opnieuw"  # hoes opnieuw schalen voor de nieuwe maat
         self._info = None
@@ -882,16 +969,63 @@ class Screen:
     def font_installed(family):
         return fonts.find(family) is not None
 
+    def has_glyph(self, f, ch):
+        """Of het lettertype dit teken heeft. Een ontbrekend teken tekent hetzelfde blokje als
+        een teken dat zeker niet bestaat; pygame zelf kan het niet vertellen."""
+        key = (id(f), ch)
+        if key not in self.glyphs:
+            if len(self.glyphs) > 2000:
+                self.glyphs.clear()
+            missing = f.render("\U0010fffd", True, (255, 255, 255))
+            surf = f.render(ch, True, (255, 255, 255))
+            self.glyphs[key] = (surf.get_size() != missing.get_size()
+                                or pygame.image.tobytes(surf, "RGBA") != pygame.image.tobytes(missing, "RGBA"))
+        return self.glyphs[key]
+
+    def runs(self, s, size, bold, family=None):
+        """Knipt de tekst in stukken met het gekozen lettertype en stukken met het standaardlettertype
+        voor tekens die het gekozen lettertype niet heeft (Open Sans heeft bijvoorbeeld geen ♪)."""
+        main = self.font(size, bold, family)
+        spare = self.font(size, bold, "standaard")
+        out = []
+        for ch in s:
+            f = main
+            # Latijnse letters heeft elk lettertype; alleen de rest nakijken
+            if ord(ch) >= 0x250 and spare is not main and not self.has_glyph(main, ch) and self.has_glyph(spare, ch):
+                f = spare
+            if out and out[-1][0] is f:
+                out[-1][1] += ch
+            else:
+                out.append([f, ch])
+        return out
+
+    def text_width(self, s, size, bold=False, family=None):
+        return sum(f.size(part)[0] for f, part in self.runs(s, size, bold, family))
+
+    def render_line(self, s, size, color, bold=False, family=None):
+        parts = self.runs(s, size, bold, family)
+        if len(parts) <= 1:  # één lettertype voor alles (ook een regel met alleen "♪")
+            f = parts[0][0] if parts else self.font(size, bold, family)
+            return f.render(s, True, color)
+        surfs = [(f, f.render(part, True, color)) for f, part in parts]
+        ascent = max(f.get_ascent() for f, _ in surfs)
+        height = max(ascent - f.get_ascent() + surf.get_height() for f, surf in surfs)
+        line = pygame.Surface((sum(surf.get_width() for _, surf in surfs), height), pygame.SRCALPHA)
+        x = 0
+        for f, surf in surfs:  # op dezelfde basislijn
+            line.blit(surf, (x, ascent - f.get_ascent()))
+            x += surf.get_width()
+        return line
+
     def text(self, s, size, color, pos, anchor="topleft", max_w=None, bold=False, family=None):
         key = (s, size, color, max_w, bold, family or self.settings["lettertype"])
         surf = self.text_cache.get(key)
         if surf is None:
-            f = self.font(size, bold, family)
-            if max_w and f.size(s)[0] > max_w:
-                while s and f.size(s + "…")[0] > max_w:
+            if max_w and self.text_width(s, size, bold, family) > max_w:
+                while s and self.text_width(s + "…", size, bold, family) > max_w:
                     s = s[:-1]
                 s = s.rstrip() + "…"
-            surf = f.render(s, True, color)
+            surf = self.render_line(s, size, color, bold, family)
             if len(self.text_cache) > 400:
                 self.text_cache.clear()
             self.text_cache[key] = surf
@@ -904,7 +1038,7 @@ class Screen:
         key = (s, size, color, None, bold, self.settings["lettertype"])
         surf = self.text_cache.get(key)
         if surf is None:
-            surf = self.font(size, bold).render(s, True, color)
+            surf = self.render_line(s, size, color, bold)
             self.text_cache[key] = surf
         return surf
 
@@ -961,13 +1095,12 @@ class Screen:
         return lines
 
     def _wrap(self, text, size, max_w):
-        f = self.font(size, False)
         lines = []
         for part in text.split("\n"):
             line = ""
             for word in part.split():
                 candidate = f"{line} {word}".strip()
-                if line and f.size(candidate)[0] > max_w:
+                if line and self.text_width(candidate, size) > max_w:
                     lines.append(line)
                     line = word
                 else:
@@ -1169,6 +1302,8 @@ class Screen:
     # -- toestand --
 
     def is_idle(self):
+        if self.view == "tour":
+            return False
         if self.view == "lyrics":
             pb, _ = self.p.snapshot()
             if pb and pb.get("is_playing"):
@@ -1208,8 +1343,13 @@ class Screen:
         mult = tuple(int(255 + (c - 255) * amount) for c in color)
         self.s.fill(mult, special_flags=pygame.BLEND_MULT)
 
+    def away(self):
+        """Bewegingssensor: al een tijd niemand gezien (en niet aangeraakt), dan gaat het scherm op zwart."""
+        now = time.monotonic()
+        return now - self.last_motion > self.away_after and now - self.last_touch > self.away_after
+
     def resting(self):
-        return self.is_dark() or self.is_idle()
+        return self.is_dark() or self.away() or self.is_idle()
 
     # -- schermen --
 
@@ -1221,18 +1361,28 @@ class Screen:
         self.update_art()
         choice = self.settings["kleur"]
         ACCENT = (self.cover_accent if choice == "hoes" else ACCENT_COLORS.get(choice)) or ACCENT_COLORS["groen"]
+        if self.cleaning():
+            self.draw_cleaning()
+            self.present()
+            return
         if self.booting:
             elapsed = time.monotonic() - self.started
             ready = self.p is not None and self.p.last_ok is not None
             if (ready and elapsed >= SPLASH_MIN) or elapsed > SPLASH_MAX:
                 self.booting = False
                 self.last_touch = time.monotonic()  # het rustscherm telt vanaf nu
+                if not self.settings.get("rondleiding_gezien"):
+                    self.start_tour()
             else:
                 self.draw_splash()
                 self.present()
                 return
         style = self.settings["nacht_stijl"]
-        if self.is_dark():
+        if self.p:
+            self.p.set_pace("slaap" if self.is_dark() or self.away() else "rust" if self.is_idle() else "actief")
+        if self.away() and not self.is_dark():
+            self.s.fill((0, 0, 0))
+        elif self.is_dark():
             self.s.fill((0, 0, 0))
             if style in NIGHT_TINT:  # zeer gedimde klok in plaats van zwart
                 self.draw_clock()
@@ -1246,6 +1396,7 @@ class Screen:
                 self.draw_cover(pb["item"])
             else:
                 self.draw_clock()
+            self.draw_wait_banner(rest=True)  # ook hier, zodat je kunt zien hoe lang het nog duurt
         else:
             self.update_art()
             if self.bg_surf:
@@ -1261,10 +1412,12 @@ class Screen:
                      "set_taal": self.draw_set_taal, "set_kleur": self.draw_set_kleur,
                      "set_scherm": self.draw_set_scherm, "info": self.draw_info, "set_power": self.draw_set_power, "set_web": self.draw_set_web, "set_update": self.draw_set_update, "artist": self.draw_artist,
                      "album": self.draw_album,
-                     "lyrics": self.draw_lyrics, "share": self.draw_share}
+                     "lyrics": self.draw_lyrics, "share": self.draw_share, "tour": self.draw_tour}
             now_view = {"rond": self.draw_now_round, "staand": self.draw_now_portrait}.get(self.shape, self.draw_now)
             views.get(self.view, now_view)()
             self.draw_toast()
+            self.draw_wait_banner()
+        self.draw_overlay()  # ook op het rustscherm en 's nachts: de knop werkt altijd
         if not self.is_dark():
             dim = self.dim_level()
             if dim > 0 and style in DIM_TINT:
@@ -1302,11 +1455,210 @@ class Screen:
         self.s.blit(right, (x + left.get_width(), y))
         # De puntjes lopen op; de tekst zelf blijft op zijn plek staan.
         status = tr("Verbinden met Spotify")
+        if wait_left():
+            status = tr("Spotify laat de app even wachten (nog {wait})", wait=duration_text(wait_left() + 59))
         dots = "." * (int(time.monotonic() * 2) % 4)
         sx = self.pt(self.cx, 0)[0] - self.font(18, False).size(status + "...")[0] // 2
         self.text(status + dots, 18, MUTED, (sx, self.pt(0, top + 182)[1]), anchor="midleft")
         self.text(f"v{APP_VERSION}", 14, CLOCK_DIM, self.pt(self.cx, top + 222), anchor="center")
         self.animating = True
+
+    def cleaning(self):
+        return time.monotonic() < self.clean_until
+
+    def start_cleaning(self):
+        self.clean_until = time.monotonic() + CLEAN_SECONDS
+        self.press, self.drag = None, None
+
+    def draw_cleaning(self):
+        """Zwart (daarop zie je vegen het best), met een grote aftelling en een ring die leegloopt."""
+        self.s.fill((0, 0, 0))
+        left = max(0.0, self.clean_until - time.monotonic())
+        cy = 200 if self.compact else 190
+        c, radius = self.pt(self.cx, cy), self.px(110)
+        pygame.draw.circle(self.s, PANEL, c, radius, self.px(8))
+        frac = left / CLEAN_SECONDS
+        if frac > 0:
+            steps = max(2, int(120 * frac))
+            pts = [(c[0] + math.sin(2 * math.pi * frac * i / steps) * radius,
+                    c[1] - math.cos(2 * math.pi * frac * i / steps) * radius) for i in range(steps + 1)]
+            pygame.draw.lines(self.s, ACCENT, False, pts, self.px(8))
+        self.text(str(math.ceil(left)), 90, TEXT, c, anchor="center", bold=True)
+        self.text(tr("Schoonmaken…"), 26, TEXT, self.pt(self.cx, cy + 150), anchor="center", bold=True)
+        self.paragraph(tr("Aanraken doet nu even niets."), 18, MUTED, self.pt(self.cx, cy + 190),
+                       self.px(340 if self.compact else 600))
+        self.animating = True
+
+    # -- rondleiding (de eerste keer, en via Instellingen) --
+
+    def tour_steps(self):
+        """(plaatje, titel, uitleg) per stap. Bij een instelling (taal, scherm, weer, kleur) staat
+        in plaats van een plaatje de instellingenpagina zelf, zodat je meteen kunt kiezen."""
+        if self.compact:
+            buttons = tr("Tik op Menu voor zoeken, playlists, de slaaptimer, delen en de instellingen.")
+        else:
+            buttons = tr("Bovenaan: zoeken, delen met een QR-code en de instellingen. Daarnaast de slaaptimer, "
+                         "de wachtrij en je playlists.")
+        steps = [("taal", tr("Kies je taal"), ""),
+                 ("scherm", tr("Hoe hangt je scherm?"), ""),
+                 ("logo", tr("Welkom bij SpotiScherm"),
+                  tr("Hiermee bedien je Spotify op je speakers. In een paar stappen zie je hoe het werkt.")),
+                 ("swipe", tr("Vegen"),
+                  tr("Veeg op het hoofdscherm naar links voor het volgende nummer en naar rechts voor het vorige. "
+                     "Op andere schermen veeg je naar rechts om terug te gaan.")),
+                 ("heart", tr("Tikken"),
+                  tr("Tik op de hoes voor de songtekst, op de artiest of het album voor meer muziek, "
+                     "en op het hartje om een nummer te liken.")),
+                 ("buttons", tr("Knoppen"), buttons),
+                 ("weer", tr("Weer bij de klok"), ""),
+                 ("kleur", tr("Kies een kleur"), "")]
+        if self.web_url():
+            steps.append(("phone", tr("Via je telefoon"),
+                          tr("Scan de code om de instellingen op je telefoon te veranderen. "
+                             "Gasten kunnen via Delen zelf een nummer aanvragen.")))
+        steps.append(("done", tr("Klaar!"),
+                      tr("Je vindt deze rondleiding terug onder Instellingen → Rondleiding.")))
+        return steps
+
+    def start_tour(self):
+        self.view, self.tour_step = "tour", 0
+
+    def tour_go(self, step):
+        steps = len(self.tour_steps())
+        self.tour_step = max(0, self.tour_step + step)
+        if self.tour_step >= steps:
+            self.end_tour()
+
+    def end_tour(self):
+        if not self.settings.get("rondleiding_gezien"):
+            self.change_setting("rondleiding_gezien", True)
+        self.view = "now"
+
+    def draw_tour(self):
+        steps = self.tour_steps()
+        self.tour_step = min(self.tour_step, len(steps) - 1)
+        picture, title, text = steps[self.tour_step]
+        last = self.tour_step == len(steps) - 1
+        if self.shape == "rond":
+            pic_y, title_y, text_y, max_w, dots_y, size = 136, 216, 288, 330, 388, 17
+            skip_box, next_box = (126, 404, 110, 40), (244, 404, 110, 40)
+        elif self.shape == "staand":
+            pic_y, title_y, text_y, max_w, dots_y, size = 150, 300, 380, 420, 490, 18
+            skip_box, next_box = (16, 560, 200, 56), (264, 560, 200, 56)
+        else:
+            pic_y, title_y, text_y, max_w, dots_y, size = 130, 250, 316, 640, 438, 20
+            skip_box, next_box = (40, 412, 200, 52), (560, 412, 200, 52)
+        pages = {"taal": self.draw_set_taal, "scherm": self.draw_set_scherm, "weer": self.draw_set_weer,
+                 "kleur": self.draw_set_kleur}
+        if picture in pages:
+            # titel bovenaan, waar die op de instellingenpagina ook staat
+            pages[picture]()
+            self.text(title, 24, TEXT, self.pt(*self.L["title"]), anchor="center", bold=True)
+        else:
+            self.tour_picture(picture, pic_y)
+            self.text(title, 30 if not self.round else 24, TEXT, self.pt(self.cx, title_y), anchor="center",
+                      bold=True)
+            self.paragraph(text, 20 if not self.round else 16, MUTED, self.pt(self.cx, text_y), self.px(max_w))
+        # puntjes: waar je bent
+        gap = 18
+        x0 = self.cx - (len(steps) - 1) * gap / 2
+        for i in range(len(steps)):
+            pygame.draw.circle(self.s, ACCENT if i == self.tour_step else PANEL, self.pt(x0 + i * gap, dots_y),
+                               self.px(5))
+        if not last:
+            self.pill(self.rect(*skip_box), tr("Overslaan"), self.end_tour, size=size)
+        elif self.tour_step:
+            self.pill(self.rect(*skip_box), tr("‹ Vorige"), lambda: self.tour_go(-1), size=size)
+        self.pill(self.rect(*next_box), tr("Aan de slag") if last else tr("Volgende ›"),
+                  lambda: self.tour_go(1), active=True, size=size)
+
+    def tour_picture(self, kind, y):
+        """Een plaatje bij de stap, getekend met dezelfde onderdelen als de app zelf."""
+        cx = self.cx
+        if kind == "logo":
+            self.draw_logo(cx, y, 130 if self.round else 150)
+        elif kind == "swipe":
+            # een vinger (stip) die heen en weer veegt, met pijlen naar beide kanten
+            t = 0 if self.economy else math.sin(time.monotonic() * 2.2)
+            for d in (-1, 1):
+                tip = self.pt(cx + d * 120, y)
+                pygame.draw.line(self.s, MUTED, self.pt(cx + d * 40, y), tip, self.px(4))
+                pygame.draw.polygon(self.s, MUTED, [tip, self.pt(cx + d * 100, y - 14), self.pt(cx + d * 100, y + 14)])
+            pygame.draw.circle(self.s, ACCENT, self.pt(cx + t * 60, y), self.px(22))
+            self.text(tr("vorige"), 16, MUTED, self.pt(cx + 120, y + 34), anchor="midtop")
+            self.text(tr("volgende"), 16, MUTED, self.pt(cx - 120, y + 34), anchor="midtop")
+            if not self.economy:
+                self.animating = True
+        elif kind == "heart":
+            art = self.rect(cx - 130, y - 60, 120, 120)
+            if self.art_surf:
+                self.s.blit(pygame.transform.smoothscale(self.art_surf, art.size), art)
+            else:
+                pygame.draw.rect(self.s, PANEL, art, border_radius=self.px(10))
+                self.text("♪", 60, MUTED, art.center, anchor="center")
+            c = self.pt(cx + 70, y)
+            pygame.draw.circle(self.s, PANEL, c, self.px(40))
+            self.icon("heart_full", c, self.px(40), TEXT)
+        elif kind == "buttons":
+            icons = ("search", "qr", "gear")
+            for i, icon in enumerate(icons):
+                c = self.pt(cx + (i - 1) * 90, y)
+                pygame.draw.circle(self.s, PANEL, c, self.px(32))
+                self.icon(icon, c, self.px(32), TEXT)
+        elif kind == "phone":
+            url = self.web_url()
+            if url and self.qr.available:
+                size = 130 if self.round else 170
+                code = self.qr.get(url, self.px(size))
+                self.s.blit(code, code.get_rect(center=self.pt(cx, y)))
+            else:
+                self.text(url or "", 22, TEXT, self.pt(cx, y), anchor="center")
+        else:  # klaar: een groot vinkje
+            c = self.pt(cx, y)
+            pygame.draw.circle(self.s, ACCENT, c, self.px(56))
+            pygame.draw.lines(self.s, BG, False, [self.pt(cx - 26, y + 2), self.pt(cx - 6, y + 22),
+                                                  self.pt(cx + 28, y - 18)], self.px(10))
+
+    # -- volumeknop en bewegingssensor --
+
+    def hardware_event(self, event):
+        kind = event[0]
+        if kind == "beweging":
+            self.last_motion = time.monotonic()
+        elif kind == "draai":
+            volume = self.p.nudge_volume(event[1] * KNOB_STEP)
+            if volume is None:
+                self.p.say(tr("Het volume van dit apparaat kun je hier niet regelen"))
+            else:
+                self.overlay = ("volume", volume, time.monotonic() + OVERLAY_SECONDS)
+        elif kind == "druk":
+            pb, _ = self.p.snapshot()
+            playing = bool(pb and pb.get("is_playing"))
+            self.p.toggle()
+            self.overlay = ("play" if not playing else "pause", None, time.monotonic() + OVERLAY_SECONDS)
+
+    def draw_overlay(self):
+        """Volumebalk of afspeelteken na draaien of drukken op de knop, onderaan in het midden."""
+        if not self.overlay or time.monotonic() > self.overlay[2]:
+            self.overlay = None
+            return
+        kind, value, _ = self.overlay
+        self.animating = True  # na afloop weer weghalen
+        y = {"rond": 360, "staand": 560}.get(self.shape, 400)
+        if kind == "volume":
+            box = self.rect(self.cx - 150, y - 34, 300, 68)
+            pygame.draw.rect(self.s, TOAST, box, border_radius=box.h // 2)
+            self.text(f"{value}%", 22, TEXT, (box.x + self.px(30), box.centery), anchor="midleft", bold=True)
+            bar = pygame.Rect(box.x + self.px(110), box.centery - self.px(5), box.w - self.px(140), self.px(10))
+            pygame.draw.rect(self.s, PANEL, bar, border_radius=bar.h // 2)
+            done = bar.copy()
+            done.w = int(bar.w * value / 100)
+            if done.w:
+                pygame.draw.rect(self.s, ACCENT, done, border_radius=bar.h // 2)
+        else:
+            c, r = self.pt(self.cx, y), self.px(38)
+            pygame.draw.circle(self.s, TOAST, c, r)
+            self.icon(kind, c, r, TEXT)
 
     def draw_message(self, title, lines):
         self.s.fill(BG)
@@ -1841,10 +2193,13 @@ class Screen:
                 (tr("Info"), self.system_info()[0][1], False, lambda: self.open_setting("info")),
                 (tr("Via je telefoon"), self.web_url() or tr("Uit"), False, lambda: self.open_setting("set_web")),
                 (tr("Bijwerken"), self.update_summary(), False, lambda: self.open_setting("set_update")),
-                (tr("Aan/uit"), tr("Herstarten of uitzetten"), False, lambda: self.open_setting("set_power"))]
+                (tr("Aan/uit"), tr("Herstarten of uitzetten"), False, lambda: self.open_setting("set_power")),
+                (tr("Rondleiding"), tr("Uitleg over het scherm"), False, self.start_tour)]
         self.draw_list(tr("Instellingen"), rows, "")
 
     def setting_page(self, title):
+        if self.view == "tour":
+            return
         L = self.L
         self.pill(self.rect(*L["back_single"]), tr("‹ Terug"), self.open_settings, size=L["pill_size"])
         self.text(tr(title), 24, TEXT, self.pt(*L["title"]), anchor="center", bold=True)
@@ -2027,6 +2382,14 @@ class Screen:
             (tr("Versie"), APP_VERSION),
             (tr("Zuinige stand"), tr("aan") if self.economy else tr("uit")),
         ]
+        hw = self.hw
+        if hw and (hw.knob or hw.motion or hw.error):
+            parts = []
+            if hw.knob:
+                parts.append(tr("volumeknop"))
+            if hw.motion:
+                parts.append(tr("beweging {ago} geleden", ago=duration_text(now - self.last_motion)))
+            self._info.append((tr("Knop en sensor"), " · ".join(parts) or tr("fout: {error}", error=hw.error)))
         self._info_at = now
         return self._info
 
@@ -2177,9 +2540,9 @@ class Screen:
         """Herstarten en uitzetten, met eerst een vraag of je het zeker weet."""
         self.setting_page("Aan/uit")
         if self.compact:
-            text_pos, max_w, boxes, size = (240, 140), 320, ((140, 196, 200, 56), (140, 266, 200, 56)), 20
+            text_pos, max_w, boxes, size = (240, 140), 320, ((140, 196, 200, 56), (140, 266, 200, 56), (140, 336, 200, 56)), 20
         else:
-            text_pos, max_w, boxes, size = (400, 120), 680, ((120, 190, 260, 84), (420, 190, 260, 84)), 26
+            text_pos, max_w, boxes, size = (400, 120), 680, ((120, 190, 260, 84), (420, 190, 260, 84), (220, 310, 360, 70)), 26
         what = self.power_confirm
         if what:
             question = tr("Herstarten: weet je het zeker?") if what == "reboot" else tr("Uitzetten: weet je het zeker?")
@@ -2192,6 +2555,8 @@ class Screen:
                        18, MUTED, self.pt(*text_pos), self.px(max_w))
         self.pill(self.rect(*boxes[0]), tr("Herstarten"), lambda: setattr(self, "power_confirm", "reboot"), size=size)
         self.pill(self.rect(*boxes[1]), tr("Uitzetten"), lambda: setattr(self, "power_confirm", "poweroff"), size=size)
+        clean = tr("Schoonmaken") if self.compact else tr("Scherm schoonmaken ({seconds} s)", seconds=CLEAN_SECONDS)
+        self.pill(self.rect(*boxes[2]), clean, self.start_cleaning, size=size - 2)
 
     def power(self, what):
         self.power_confirm = None
@@ -2216,11 +2581,12 @@ class Screen:
         lines = self.system_info()
         if self.compact:
             for i, (label, value) in enumerate(lines):
-                self.text(f"{label}: {value}", 15, TEXT if i == 0 else MUTED, self.pt(self.cx, 100 + i * 32),
+                self.text(f"{label}: {value}", 15, TEXT if i == 0 else MUTED, self.pt(self.cx, 100 + i * min(32, 300 // len(lines))),
                           anchor="center", max_w=self.px(320), bold=i == 0)
             return
+        step = min(42, 380 // len(lines))
         for i, (label, value) in enumerate(lines):
-            y = 96 + i * 42
+            y = 96 + i * step
             self.text(label, 20, MUTED, self.pt(360, y), anchor="midright")
             self.text(value, 20, TEXT, self.pt(384, y), anchor="midleft", max_w=self.px(400), bold=i == 0)
 
@@ -2419,6 +2785,19 @@ class Screen:
             self.text(line, small, MUTED, self.pt(cx, text_y + big + 6 + n * (small + 6)), anchor="center",
                       max_w=self.px(max_w))
 
+    def draw_wait_banner(self, rest=False):
+        """Laat Spotify ons wachten (te veel verzoeken), dan zeggen we dat bovenaan, met hoe lang nog."""
+        left = wait_left()
+        if not left:
+            return
+        text = tr("Spotify laat de app even wachten (nog {wait})", wait=duration_text(left + 59))
+        f, pad = self.font(16, False), self.px(16)
+        r = pygame.Rect(0, 0, min(f.size(text)[0] + 2 * pad, self.px(self.L["toast_w"])), self.px(34))
+        # Op het rustscherm helemaal bovenin, boven de klok; anders onder de knoppenrij.
+        r.midtop = self.pt(self.cx, {"rond": 70 if rest else 96, "staand": -100}.get(self.shape, 8 if rest else 60))
+        pygame.draw.rect(self.s, (120, 40, 40), r, border_radius=r.h // 2)
+        self.text(text, 16, TEXT, r.center, anchor="center", max_w=r.w - 2 * pad)
+
     def draw_toast(self):
         with self.p.lock:
             msg, until = self.p.message, self.p.message_until
@@ -2571,6 +2950,7 @@ class Screen:
         if s["draaien"] != self.rotation:
             self.configure()
         self.fonts.clear()        # lettertype kan veranderd zijn
+        self.glyphs.clear()
         self.text_cache.clear()
         self.idle_after = s["idle_min"] * 60 if s["idle_min"] else math.inf
         self.night = parse_night(s["nacht_van"], s["nacht_tot"]) if s["nacht_stijl"] != "uit" else None
@@ -2626,6 +3006,8 @@ class Screen:
     # -- aanraken en slepen --
 
     def on_down(self, pos):
+        if self.cleaning():
+            return
         self.swallow = self.resting()  # eerste tik maakt alleen wakker
         self.last_touch = time.monotonic()
         self.press, self.dragging, self.drag = (pos, self.scroll), False, None
@@ -2638,6 +3020,8 @@ class Screen:
                 return
 
     def on_move(self, pos):
+        if self.cleaning():
+            return
         self.last_touch = time.monotonic()
         if self.drag:
             self.drag[1] = self.drag[2](pos)
@@ -2648,7 +3032,8 @@ class Screen:
             return
         if not self.press or self.view in ("now", "menu", "timer", "keyboard",
                                               "set_weer", "set_rust", "set_nacht", "set_font", "set_taal",
-                                              "set_kleur", "set_scherm", "info", "share", "set_power", "set_web", "set_update"):
+                                              "set_kleur", "set_scherm", "info", "share", "set_power", "set_web", "set_update",
+                                              "tour"):
             return
         dy = pos[1] - self.press[0][1]
         if abs(dy) > self.px(12):
@@ -2663,7 +3048,9 @@ class Screen:
         dx, dy = pos[0] - x0, pos[1] - y0
         if abs(dx) < self.px(SWIPE_MIN) or abs(dx) < 1.5 * abs(dy):
             return False
-        if self.view == "now":
+        if self.view == "tour":
+            self.tour_go(1 if dx < 0 else -1)
+        elif self.view == "now":
             if dx < 0:
                 self.p.next()
                 self.p.say(tr("Volgend nummer"), 1.5)
@@ -2677,6 +3064,9 @@ class Screen:
         return True
 
     def on_up(self, pos):
+        if self.cleaning():
+            self.press = None
+            return
         if self.drag:
             _, _, to_frac, on_release, _ = self.drag
             self.drag = None
@@ -2802,6 +3192,9 @@ def main():
         web = SettingsServer(port, ui.web_describe, ui.web_validate, guests)
         web.start()
         ui.web_port = port
+    ui.hw = Hardware()
+    if ui.hw.motion:
+        ui.away_after = float(os.environ.get("SPOTISCHERM_BEWEGING_MIN", "10") or 10) * 60
     touch_fps, calm_fps = ECONOMY_FPS if economy else (FPS, CALM_FPS)
     clock = pygame.time.Clock()
     finger = None
@@ -2817,6 +3210,12 @@ def main():
             changed = True
         if changed:
             ui.p.say(tr("Instellingen aangepast via je telefoon"), 3)
+        while True:  # volumeknop en bewegingssensor
+            try:
+                ui.hardware_event(ui.hw.events.get_nowait())
+            except queue.Empty:
+                break
+        ui.p.flush_volume()
         if ui.updates and ui.updates.announce():
             ui.p.say(tr("Versie {version} is uit: Instellingen → Bijwerken", version=ui.updates.latest["version"]), 8)
         for ev in pygame.event.get():
@@ -2863,16 +3262,24 @@ def main():
                 ui.scroll = max(0, ui.scroll - ev.y * ui.px(60))
         started = time.perf_counter()
         ui.draw()
+        if web:
+            web.take_shot(ui.s, png_bytes)
         ui.frame_ms = ui.frame_ms * 0.9 + (time.perf_counter() - started) * 100  # gemiddelde in ms
         ui.fps = clock.get_fps()
         # Alleen snel tekenen als iemand het scherm aanraakt: scheelt veel CPU op de Pi,
         # zeker bij een groot scherm zoals 1080x1080.
-        if ui.drag or time.monotonic() - ui.last_touch < 3:
+        if ui.drag or time.monotonic() - ui.last_touch < 3 or ui.overlay:
             clock.tick(touch_fps)
         elif ui.animating:
             clock.tick(MARQUEE_FPS)
         else:
             clock.tick(2 if ui.resting() else calm_fps)
+
+
+def png_bytes(surface):
+    buf = io.BytesIO()
+    pygame.image.save(surface, buf, "scherm.png")
+    return buf.getvalue()
 
 
 if __name__ == "__main__":

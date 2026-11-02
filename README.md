@@ -6,6 +6,8 @@ A touchscreen for your room or your wall that controls Spotify and sends the mus
 Spotify Connect device in your home: Sonos, smart speakers, TV, PC or phone. It runs on a
 Raspberry Pi, from the very first Pi 1 up to the Pi 5.
 
+**[▶ Click through the screens in the online demo](https://gamenhaadee.github.io/Spotischerm/)**
+
 *"Scherm" is Dutch for "screen". The app speaks English, Dutch, German, French and Spanish.*
 
 ![Now playing](docs/screen-now.en.png)
@@ -58,6 +60,15 @@ Raspberry Pi, from the very first Pi 1 up to the Pi 5.
   phone and add it to the queue (at most 3 per guest per 15 minutes).
 - **Settings from your phone:** the same settings on a web page, at `http://spotischerm.local:8080`.
   Under Settings → From your phone the screen shows a QR code with the address.
+- **Screenshot from your phone:** at the bottom of the phone page you see what is on the screen
+  right now. Nothing is stored.
+- **Tour and setup on first start:** choose your language, how the screen is mounted, the weather
+  and a colour, and see in a few steps how it works. You can find it again under Settings.
+- **Cleaning mode:** for 30 seconds touching does nothing, so you can wipe the screen
+  (Settings → Power).
+- **Volume knob and motion sensor** (optional, on the GPIO): turn for the volume, press to pause;
+  with nobody around the screen goes black. Wiring: see
+  [behuizing/aansluitschema-3pin.svg](behuizing/aansluitschema-3pin.svg).
 - **Three screen shapes:** landscape, round (for example Waveshare 1080×1080) and portrait, each
   with its own layout.
 
@@ -302,6 +313,9 @@ The info page reads the IP address, Wi-Fi and temperature on the Pi itself only.
 - **Other people's playlists:** Spotify doesn't return their track lists. You can still play them
   as a whole.
 - **Search** returns at most 10 results per type, a Spotify limit.
+- **How many requests you may make** is not published by Spotify. If the app goes over it, Spotify
+  makes it wait for hours; the screen then shows how long. That's why the app only asks often what's
+  playing while you use the screen.
 - **Lyrics** are only available if LRCLIB has them, and the timing is approximate.
 - **Dimming** happens in software. The screen's backlight stays on, so at night you still see a
   faint glow.

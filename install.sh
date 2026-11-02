@@ -12,6 +12,7 @@ fi
 
 sudo apt-get update
 sudo apt-get install -y python3-pygame python3-requests python3-venv python3-zeroconf \
+  python3-gpiozero python3-lgpio \
   fonts-dejavu-core fonts-roboto fonts-open-sans fonts-lato fonts-comic-neue
 # Grafische onderdelen (EGL/GLES van Mesa) die SDL nodig heeft om zonder desktop op het
 # scherm te tekenen. Op Raspberry Pi OS Lite ontbreken ze soms ("EGL not initialized").

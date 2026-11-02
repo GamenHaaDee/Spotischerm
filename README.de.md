@@ -6,6 +6,8 @@ Ein Touchscreen für dein Zimmer oder die Wand, mit dem du Spotify steuerst und 
 Spotify-Connect-Gerät im Haus schickst: Sonos, smarte Lautsprecher, Fernseher, PC oder Handy.
 Läuft auf einem Raspberry Pi, vom allerersten Pi 1 bis zum Pi 5.
 
+**[▶ Klick dich in der Online-Demo durch die Bildschirme](https://gamenhaadee.github.io/Spotischerm/)**
+
 *„Scherm" ist Niederländisch für „Bildschirm". Die App spricht Deutsch, Englisch, Niederländisch, Französisch und Spanisch.*
 
 ![Aktuelle Wiedergabe](docs/screen-now.de.png)
@@ -61,6 +63,15 @@ Läuft auf einem Raspberry Pi, vom allerersten Pi 1 bis zum Pi 5.
   Handy einen Song und fügen ihn zur Warteschlange hinzu (höchstens 3 pro Gast und Viertelstunde).
 - **Einstellungen per Handy:** dieselben Einstellungen auf einer Webseite, unter
   `http://spotischerm.local:8080`. Unter Einstellungen → Per Handy zeigt der Bildschirm einen QR-Code.
+- **Screenshot per Handy:** unten auf der Handy-Seite siehst du, was gerade auf dem Bildschirm
+  ist. Es wird nichts gespeichert.
+- **Tour und Einrichtung beim ersten Start:** wähle Sprache, Ausrichtung des Bildschirms, Wetter und
+  eine Farbe, und sieh in ein paar Schritten, wie es geht. Später unter Einstellungen wiederzufinden.
+- **Reinigungsmodus:** 30 Sekunden lang bewirkt Berühren nichts, damit du den Bildschirm abwischen
+  kannst (Einstellungen → Ein/Aus).
+- **Lautstärkeregler und Bewegungsmelder** (optional, am GPIO): drehen für die Lautstärke, drücken
+  für Pause; ist niemand da, wird der Bildschirm schwarz. Anschluss: siehe
+  [behuizing/aansluitschema-3pin.svg](behuizing/aansluitschema-3pin.svg).
 - **Drei Bildschirmformen:** quer, rund (zum Beispiel Waveshare 1080×1080) und hochkant, jeweils mit
   eigenem Layout.
 
@@ -310,6 +321,9 @@ heraus. Die Info-Seite liest IP-Adresse, WLAN und Temperatur nur auf dem Pi selb
 - **Playlists von anderen:** Spotify liefert deren Titellisten nicht. Du kannst sie aber als Ganzes
   abspielen.
 - **Die Suche** liefert höchstens 10 Ergebnisse pro Art, eine Grenze von Spotify.
+- **Wie viele Anfragen erlaubt sind,** verrät Spotify nicht. Überschreitet die App das, lässt Spotify
+  sie stundenlang warten; der Bildschirm zeigt dann, wie lange noch. Deshalb fragt die App nur dann oft,
+  was läuft, wenn du den Bildschirm benutzt.
 - **Songtexte** gibt es nur, wenn LRCLIB sie hat, und das Timing ist ungefähr.
 - **Das Dimmen** passiert in der Software. Die Hintergrundbeleuchtung bleibt an, nachts siehst du
   also noch ein schwaches Leuchten.

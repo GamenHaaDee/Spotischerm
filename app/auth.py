@@ -6,7 +6,9 @@ op 'Akkoord'. Je browser gaat daarna naar http://127.0.0.1:8888/callback?code=..
 en geeft een foutmelding: dat hoort zo. Kopieer die hele adresbalk en plak
 hem hier terug.
 """
-from common import make_client
+from spotipy.exceptions import SpotifyException
+
+from common import make_client, wait_left
 
 print(__doc__)
 sp = make_client()
@@ -22,7 +24,15 @@ if product and product != "premium":
 elif not product:
     print("Afspelen bedienen werkt alleen met Spotify Premium (het abonnement kan de app zelf niet zien).")
 
-devices = sp.devices().get("devices", [])
+try:
+    devices = sp.devices().get("devices", [])
+except SpotifyException as err:
+    if err.http_status != 429:
+        raise
+    hours, minutes = divmod(int(wait_left()) // 60, 60)
+    print(f"Spotify laat deze app even wachten (te veel verzoeken): nog {hours} uur {minutes} min.")
+    print("Het inloggen is wel gelukt; de app gaat vanzelf weer verder.")
+    raise SystemExit(0)
 if devices:
     print("Spotify ziet nu deze apparaten:")
     for d in devices:

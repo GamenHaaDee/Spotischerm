@@ -1,9 +1,11 @@
 """Gedeelde instellingen en de Spotify-client voor SpotiScherm."""
 import json
 import os
+import time
 from pathlib import Path
 
 import spotipy
+from spotipy.exceptions import SpotifyException
 from spotipy.oauth2 import SpotifyOAuth
 
 ROOT = Path(__file__).resolve().parent.parent
@@ -60,6 +62,60 @@ def granted_scopes():
         return set()
 
 
+# Tot wanneer (time.time) Spotify ons laat wachten na "te veel verzoeken" (429). Staat ook in een
+# bestandje, zodat een herstart (of auth.py) niet meteen weer een verzoek stuurt.
+WAIT_PATH = ROOT / ".spotify-wachten"
+try:
+    _blocked_until = float(WAIT_PATH.read_text())
+except (OSError, ValueError):
+    _blocked_until = 0.0
+
+
+def wait_left():
+    """Hoeveel seconden Spotify ons nog laat wachten (0 = niet)."""
+    return max(0.0, _blocked_until - time.time())
+
+
+def _block(seconds):
+    global _blocked_until
+    _blocked_until = time.time() + seconds
+    try:
+        WAIT_PATH.write_text(f"{_blocked_until:.0f}")
+    except OSError:
+        pass
+
+
+class Client(spotipy.Spotify):
+    """Spotify-client die bij "te veel verzoeken" niet blijft hangen.
+
+    spotipy wacht zelf zo lang als Spotify vraagt, en dat kan uren zijn: dan staat de hele app
+    stil. Deze client onthoudt het, geeft meteen een fout (429), en stuurt tot die tijd niets.
+    """
+
+    def _build_session(self):
+        super()._build_session()
+        # urllib3 wacht bij een 429 met Retry-After anders tóch, ook als 429 niet in status_forcelist staat.
+        for adapter in self._session.adapters.values():
+            adapter.max_retries = adapter.max_retries.new(respect_retry_after_header=False)
+
+    def _internal_call(self, method, url, payload, params):
+        left = wait_left()
+        if left > 0:
+            raise SpotifyException(429, -1, "Spotify laat ons nog even wachten",
+                                   headers={"Retry-After": str(int(left) + 1)})
+        try:
+            return super()._internal_call(method, url, payload, params)
+        except SpotifyException as err:
+            if err.http_status == 429:
+                try:
+                    seconds = int((err.headers or {}).get("Retry-After"))
+                except (TypeError, ValueError):
+                    seconds = 30
+                _block(max(seconds, 1))
+                print(f"Spotify: te veel verzoeken, {seconds} s wachten", flush=True)
+            raise
+
+
 def make_client(scope=SCOPES):
     load_config()
     auth = SpotifyOAuth(
@@ -70,4 +126,5 @@ def make_client(scope=SCOPES):
         cache_path=str(CACHE_PATH),
         open_browser=False,
     )
-    return spotipy.Spotify(auth_manager=auth, requests_timeout=8, retries=2)
+    # 429 niet in de lijst: dat handelt Client zelf af, zonder te blijven wachten.
+    return Client(auth_manager=auth, requests_timeout=8, retries=2, status_forcelist=(500, 502, 503, 504))

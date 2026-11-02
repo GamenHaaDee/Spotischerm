@@ -6,8 +6,9 @@
 // zijn warme lucht kwijt kan.
 //
 // Optioneel (aan/uit in de Customizer): keystone-poorten onderin voor USB of netwerk,
-// een volumeknop (draaiknop EC11) in de rechterzijkant en een bewegingssensor (mini-PIR)
-// in de onderkant, die schuin naar voren de kamer in kijkt.
+// een volumeknop (draaiknop EC11) in de rechterzijkant, een bewegingssensor (mini-PIR)
+// in de onderkant, een 5V-bus voor de ledstrip en een gaatjesbord voor de elektronica.
+// Aansluiten: zie aansluitschema-3pin.svg (of -4pin.svg voor een PWM-ventilator).
 //
 // Alle maten in mm. Pas in OpenSCAD de waarden aan via Window > Customizer.
 // MEET JE EIGEN SCHERM OP: de standaardwaarden zijn voor een gangbaar 7"-HDMI-scherm
@@ -23,11 +24,12 @@
 //  - Adafruit 4056: USB-C (female) naar micro-B (male), met de 2 M3-schroefjes die erbij zitten
 //  - dun schuimtape om het scherm stevig in de voorkant te klemmen
 //  - optioneel: keystone-modules (USB-A en/of RJ45) met een kort kabeltje naar de Pi,
-//    een EC11-draaiknop met drukknop, en een mini-PIR (bijv. AM312)
+//    een EC11-draaiknop met drukknop, een mini-PIR (bijv. AM312), een inbouwbus 5,5x2,1 mm
+//    (bijv. DC-022B) voor de ledstrip, en een stukje gaatjesbord (50x25) met 4x M2-schroefje
 
 /* [Wat laten zien] */
 // printen = alle delen naast elkaar, samen = in elkaar gezet, test_* = proefstukjes
-deel = "samen"; // [samen, printen, voor, achter, voetjes, test_usbc, test_keystone, test_knop]
+deel = "samen"; // [samen, printen, voor, achter, voetjes, test_usbc, test_keystone, test_knop, test_barrel]
 
 /* [Scherm] */
 // Breedte van de schermmodule (het grootste: glas of printplaat)
@@ -112,6 +114,11 @@ knop_kom = 12.5;
 knop_kom_diepte = 2;
 // Ring aan de binnenkant, zodat de wand rond het gat sterk genoeg blijft
 knop_ring = 18;
+// Steunblok onder het huisje van de knop, zodat hij niet wiebelt als je hem indrukt
+knop_steun = true;
+// Afmetingen van het huisje (EC11: 12,4 x 13,2; diepte vanaf de wand, zonder pinnetjes)
+knop_huis_b = 12.4;
+knop_huis_diepte = 6.5;
 
 /* [Bewegingssensor (onderkant)] */
 // Gat in de onderkant voor een mini-PIR (bijv. AM312); de kegel van ~100 graden ziet de kamer in
@@ -123,6 +130,33 @@ pir_x = 62;
 pir_z = 18;
 // Kraag aan de binnenkant waar het printplaatje tegenaan komt (0 = geen)
 pir_kraag = 14;
+
+/* [Ledstrip: 5V-ingang en kabelgat] */
+// Inbouwbus 5,5 x 2,1 mm in de onderkant voor een eigen 5V-voeding (de leds trekken te veel voor de Pi)
+ledvoeding = true;
+// Gat voor de bus: DC-022B heeft schroefdraad M8, dus 8 mm (+ wat speling)
+barrel_gat = 8.2;
+// Platte kant tegen meedraaien: afstand van het midden tot de platte kant (0 = rond gat)
+barrel_plat = 0;
+// Plek: vanaf de linker buitenkant, en hoogte vanaf de achterkant
+barrel_x = 20;
+barrel_z = 15;
+// Gat in de achterkant voor de draden naar de ledstrip (die op de achterkant naar de muur schijnt)
+ledstrip_gat = 5;
+ledstrip_x = 24;
+ledstrip_y = 22;
+
+/* [Gaatjesbord (level shifter, MOSFET)] */
+// Afstandhouders voor een stukje gaatjesbord, boven de Pi (bij de GPIO-pinnen)
+gaatjesbord = true;
+bord_b = 50;
+bord_h = 25;
+// Gaten zoveel mm van de randen van het bord
+bord_gat_rand = 2.5;
+// Plek van het bord (linksonder), gemeten vanaf de binnenkant van de linkerwand en de bovenwand
+bord_x = 66;
+bord_boven = 3;
+bord_hoogte = 5;
 
 $fn = 48;
 
@@ -148,6 +182,9 @@ keystone_xs = keystones > 0
 keystone_links = keystones > 0 ? keystone_xs[keystones - 1] - keystone_b / 2 - 6 : B - 30;
 // ventilatiesleuven onderin pas na de USB-C-ingang en de bewegingssensor
 sleuf_start = bewegingssensor ? pir_x + pir_gat / 2 + 6 : 62;
+bord_y = H - wand - bord_boven - bord_h;  // onderkant van het gaatjesbord
+bord_gaten = [for (gx = [bord_gat_rand, bord_b - bord_gat_rand], gy = [bord_gat_rand, bord_h - bord_gat_rand])
+              [wand + bord_x + gx, bord_y + gy]];
 
 module rrect(b, h, r) {
     translate([r, r]) offset(r = r) square([b - 2 * r, h - 2 * r]);
@@ -210,6 +247,15 @@ module knop_gat_vorm() {
     }
 }
 
+module barrel_gat_vorm() {
+    // Rond gat door de onderwand, eventueel met een platte kant zodat de bus niet meedraait.
+    rotate([-90, 0, 0]) linear_extrude(wand + 2) intersection() {
+        circle(d = barrel_gat);
+        if (barrel_plat > 0) translate([-barrel_gat, -barrel_gat]) square([2 * barrel_gat, barrel_gat + barrel_plat]);
+        else circle(d = barrel_gat + 1);
+    }
+}
+
 module achter() {
     difference() {
         union() {
@@ -227,6 +273,12 @@ module achter() {
             // ring rond de volumeknop, binnen tegen de rechterwand
             if (volumeknop) translate([B - wand - knop_kom_diepte + 0.01, knop_y, knop_z]) rotate([0, 90, 0])
                 cylinder(d = knop_ring, h = knop_kom_diepte);
+            // steunblok onder het huisje van de knop, vanaf de achterwand
+            if (volumeknop && knop_steun)
+                translate([B - wand - knop_kom_diepte - knop_huis_diepte, knop_y - knop_huis_b / 2, wand - 0.01])
+                    cube([knop_huis_diepte, knop_huis_b, knop_z - knop_huis_b / 2 - 0.2 - wand + 0.01]);
+            // afstandhouders voor het gaatjesbord
+            if (gaatjesbord) for (g = bord_gaten) translate([g[0], g[1], wand - 0.01]) cylinder(d = 5.5, h = bord_hoogte);
             // afstandhouders voor de Pi
             for (g = pi_gaten) translate([wand + pi_x + g[0], wand + pi_y + g[1], wand - 0.01])
                 cylinder(d = 6, h = pi_hoogte);
@@ -239,6 +291,11 @@ module achter() {
         // gaatjes voor M2.5 in de afstandhouders (niet door de achterwand)
         for (g = pi_gaten) translate([wand + pi_x + g[0], wand + pi_y + g[1], wand + 0.6])
             cylinder(d = 2.3, h = pi_hoogte + 1);
+        // gaatjes voor M2 in de afstandhouders van het gaatjesbord
+        if (gaatjesbord) for (g = bord_gaten) translate([g[0], g[1], wand + 0.6]) cylinder(d = 1.7, h = bord_hoogte + 1);
+        // 5V-bus voor de ledstrip, en het gat voor de draden naar de strip
+        if (ledvoeding) translate([barrel_x, -1, barrel_z]) barrel_gat_vorm();
+        if (ledstrip_gat > 0) translate([ledstrip_x, ledstrip_y, -1]) cylinder(d = ledstrip_gat, h = wand + 2);
         // ventilator: rooster en schroefgaten
         if (ventilator) translate([fan_c[0], fan_c[1], -1]) {
             for (i = [-3:3], j = [-3:3])
@@ -303,6 +360,14 @@ module test_knop() {
     }
 }
 
+module test_barrel() {
+    // Proefstukje: past de 5V-bus, en draait hij niet mee?
+    difference() {
+        translate([-10, 0, -10]) cube([20, wand, 20]);
+        translate([0, -1, 0]) barrel_gat_vorm();
+    }
+}
+
 // ================= tonen =================
 if (deel == "voor") {
     translate([0, 0, voor_d]) mirror([0, 0, 1]) voor();     // voorkant op het bed
@@ -314,6 +379,8 @@ if (deel == "voor") {
     rotate([90, 0, 0]) test_usbc();
 } else if (deel == "test_keystone") {
     rotate([90, 0, 0]) test_keystone();
+} else if (deel == "test_barrel") {
+    rotate([90, 0, 0]) test_barrel();
 } else if (deel == "test_knop") {
     rotate([0, -90, 0]) test_knop();
 } else if (deel == "printen") {
@@ -332,5 +399,15 @@ if (deel == "voor") {
     // een laag knopje van 12 mm (bijv. aluminium, 6 mm hoog)
     if (volumeknop) color("silver") translate([B + 0.5, knop_y, knop_z]) rotate([0, 90, 0]) cylinder(d = 12, h = 6);
     if (bewegingssensor) color("white") translate([pir_x, 0, pir_z]) sphere(d = pir_gat - 1);
+    // het huisje van de knop binnenin, op zijn steunblok
+    if (volumeknop) color("darkslategray")
+        translate([B - wand - knop_kom_diepte - knop_huis_diepte, knop_y - knop_huis_b / 2, knop_z - knop_huis_b / 2])
+            cube([knop_huis_diepte, knop_huis_b, knop_huis_b]);
+    // 5V-bus: moer buiten, huls binnen
+    if (ledvoeding) {
+        color("black") translate([barrel_x, 0.01, barrel_z]) rotate([90, 0, 0]) cylinder(d = 11, h = 2.5, $fn = 6);
+        color("black") translate([barrel_x, wand, barrel_z]) rotate([-90, 0, 0]) cylinder(d = 10, h = 14);
+    }
+    if (gaatjesbord) color("darkgreen") translate([wand + bord_x, bord_y, wand + bord_hoogte]) cube([bord_b, bord_h, 1.6]);
     for (v = voetjes) color("white") translate([v[0], v[1], 0]) mirror([0, 0, 1]) cylinder(d = 12, h = afstand_muur);
 }

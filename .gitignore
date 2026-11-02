@@ -8,6 +8,8 @@ config.env.bak*
 # Wat je op het scherm instelt (o.a. je woonplaats voor het weer)
 instellingen.json
 instellingen.tmp
+# Hoe lang Spotify de app laat wachten na "te veel verzoeken"
+.spotify-wachten
 
 # --- Python ---
 .venv/
@@ -23,6 +25,8 @@ desktop.ini
 .vscode/
 .idea/
 *.swp
+.impeccable/
+.ruff_cache/
 
 # --- Nextcloud-synchronisatie ---
 .sync_*.db*

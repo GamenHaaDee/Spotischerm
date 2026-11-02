@@ -67,6 +67,9 @@ You can also change these on the screen. See the [mapping table](#instellingenjs
 |---|---|---|---|
 | `SCHERM_VORM` | `auto` | `auto`, `rond`, `rechthoek` | Layout. `auto` picks the round layout for a (nearly) square screen. Portrait comes from `DRAAIEN` |
 | `SPOTISCHERM_FRAMEBUFFER` | `0` | `0`, `1` | `1` = draw straight into `/dev/fb0` instead of through SDL/KMS, and read touch and mouse input from `/dev/input` directly. Needed on the Pi 1, see [TROUBLESHOOTING.md](TROUBLESHOOTING.md#the-screen-stays-black) |
+| `SPOTISCHERM_DRAAIKNOP` | `0` | `0`, `1`, or `A,B,button` | Volume knob (EC11 rotary encoder) on the GPIO pins. `1` = GPIO 5,6,26 from the wiring diagram ([behuizing/aansluitschema-3pin.svg](behuizing/aansluitschema-3pin.svg)), or your own GPIO numbers. Turn = volume (3% per click), press = play/pause |
+| `SPOTISCHERM_BEWEGING` | `0` | `0`, `1`, or a GPIO number | Motion sensor (PIR, e.g. AM312). `1` = GPIO27. With nobody around, the screen goes black; movement brings it back |
+| `SPOTISCHERM_BEWEGING_MIN` | `10` | minutes | Motion sensor: the screen goes black after this many minutes without movement and without touch |
 | `SPOTISCHERM_ZUINIG` | `0` | `0`, `1` | Economy mode for slow Pis: 300 px album cover, simple scaling, at most 10 fps, no scrolling titles, no coloured background |
 | `SPOTISCHERM_WINDOWED` | `0` | `0`, `1` | `1` = run in an 800×480 window (540×540 when round), for testing on a PC |
 | `SPOTISCHERM_MUIS` | `0` | `0`, `1` | `1` = show the mouse cursor in full screen. Not available in framebuffer mode |

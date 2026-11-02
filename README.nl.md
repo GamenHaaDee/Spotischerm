@@ -6,6 +6,8 @@ Een touchscreen voor op je kamer of aan de muur, waarmee je Spotify bedient en d
 elk Spotify Connect-apparaat in huis stuurt: Sonos, slimme speakers, tv, pc of telefoon. Draait
 op een Raspberry Pi, van de allereerste Pi 1 tot de Pi 5.
 
+**[▶ Klik door de schermen in de online demo](https://gamenhaadee.github.io/Spotischerm/)**
+
 ![Nu aan het spelen](docs/screen-now.nl.png)
 
 | Apparaat kiezen | Meelopende songtekst |
@@ -58,6 +60,15 @@ op een Raspberry Pi, van de allereerste Pi 1 tot de Pi 5.
   een nummer en zetten het in de wachtrij (maximaal 3 per gast per kwartier).
 - **Instellingen via je telefoon:** dezelfde instellingen op een webpagina, op
   `http://spotischerm.local:8080`. Onder Instellingen → Via je telefoon toont het scherm een QR-code.
+- **Schermafdruk via je telefoon:** onderaan de telefoonpagina zie je wat er nu op het scherm
+  staat. Er wordt niets bewaard.
+- **Rondleiding en instellen bij de eerste start:** kies je taal, hoe het scherm hangt, het weer en
+  een kleur, en zie in een paar stappen hoe het werkt. Later terug te vinden onder Instellingen.
+- **Schoonmaakstand:** 30 seconden doet aanraken niets, zodat je het scherm kunt afnemen
+  (Instellingen → Aan/uit).
+- **Volumeknop en bewegingssensor** (optioneel, op de GPIO): draai voor het volume, druk voor
+  pauze; zonder beweging gaat het scherm op zwart. Aansluiten: zie
+  [behuizing/aansluitschema-3pin.svg](behuizing/aansluitschema-3pin.svg).
 - **Drie schermvormen:** liggend, rond (bijv. Waveshare 1080×1080) en staand, elk met een eigen
   indeling.
 
@@ -306,6 +317,9 @@ ongeluk op GitHub komen. De info-pagina leest IP-adres, wifi en temperatuur alle
 - **Playlists van anderen:** daarvan geeft Spotify de nummers niet. Je kunt ze wel in zijn geheel
   afspelen.
 - **Zoeken** geeft maximaal 10 resultaten per soort, dat is een grens van Spotify.
+- **Hoeveel verzoeken je mag doen** maakt Spotify niet bekend. Gaat de app erover, dan laat Spotify
+  hem uren wachten; het scherm toont dan hoe lang nog. De app vraagt daarom alleen vaak wat er speelt
+  als je het scherm gebruikt.
 - **Songteksten** zijn er alleen als ze in LRCLIB staan, en de timing is een benadering.
 - **Dimmen** gebeurt in de software. De achtergrondverlichting van het scherm blijft aan, dus 's
   nachts zie je nog een zwakke gloed.

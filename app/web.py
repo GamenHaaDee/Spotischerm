@@ -3,6 +3,7 @@
 Instellingen: alleen de keuzes van het tandwiel (weer, rustscherm, nachtmodus, ...); geen
 Spotify-sleutels of wachtwoorden. Wijzigingen gaan via een wachtrij naar het scherm.
 Verzoekjes (/verzoekjes): gasten zoeken een nummer en zetten het in de wachtrij.
+Schermafdruk (/scherm.png): wat nu op het scherm staat, als plaatje.
 """
 import re
 import html
@@ -41,10 +42,13 @@ button {{ width:100%; padding:14px; border:0; border-radius:999px; background:va
   font:600 17px system-ui,sans-serif; margin:4px 0 24px; }}
 .ok {{ background:#1e3a26; color:#bff5cf; padding:10px 14px; border-radius:10px; margin-bottom:12px; }}
 .err {{ background:#4a1f1f; color:#ffd0d0; padding:10px 14px; border-radius:10px; margin-bottom:12px; }}
+a.shot {{ display:block; text-align:center; padding:14px; border-radius:999px; background:var(--panel); color:var(--text);
+  text-decoration:none; font-weight:600; margin:0 0 24px; }}
 </style></head><body><main>
 <h1>SpotiScherm</h1><p class="sub">{subtitle}</p>
 {notice}
 <form method="post">{fields}<button type="submit">{save}</button></form>
+<a class="shot" href="/scherm.png">{shot}</a>
 </main></body></html>"""
 
 
@@ -139,8 +143,29 @@ class SettingsServer(threading.Thread):
         # guests: object met search(query), add(uri, name) -> (gelukt, melding) en now() -> tekst of None
         self.guests = guests
         self.changes = queue.Queue()
+        # Schermafdruk: de webthread vraagt erom, het scherm maakt hem bij het volgende beeld (take_shot).
+        self.shot_wanted, self.shot_ready = threading.Event(), threading.Event()
+        self.shot, self.shot_lock = None, threading.Lock()
         self.request_log = {}    # IP-adres -> tijden van verzoekjes
         self.log_lock = threading.Lock()
+
+    def take_shot(self, surface, save):
+        """Vanuit de hoofdlus: als iemand om een schermafdruk vroeg, nu het beeld als PNG bewaren."""
+        if self.shot_wanted.is_set():
+            self.shot_wanted.clear()
+            self.shot = save(surface)
+            self.shot_ready.set()
+
+    def screenshot(self):
+        """PNG van het scherm, of None als het scherm niet op tijd antwoordt."""
+        with self.shot_lock:
+            self.shot_ready.clear()
+            self.shot_wanted.set()
+            if not self.shot_ready.wait(5):
+                self.shot_wanted.clear()
+                return None
+            data, self.shot = self.shot, None  # niets bewaren: elke schermafdruk is nieuw
+            return data
 
     def request_allowed(self, ip):
         """Mag deze gast nog een verzoekje doen? Zo niet: hoeveel minuten wachten."""
@@ -164,7 +189,8 @@ class SettingsServer(threading.Thread):
                 fields, settings, accent = server.describe()
                 body = PAGE.format(lang=language(), accent=accent, notice=notice,
                                    subtitle=html.escape(tr("Instellingen via je telefoon")),
-                                   fields=_render(fields, settings, notice), save=html.escape(tr("Opslaan")))
+                                   fields=_render(fields, settings, notice), save=html.escape(tr("Opslaan")),
+                                   shot=html.escape("📸 " + tr("Schermafdruk maken")))
                 data = body.encode("utf-8")
                 self.send_response(200)
                 self.send_header("Content-Type", "text/html; charset=utf-8")
@@ -212,11 +238,28 @@ class SettingsServer(threading.Thread):
                               if added else "")
                     self.send_requests(params.get("q", "").strip()[:80], notice)
                     return
+                if url.path == "/scherm.png":
+                    self.send_shot()
+                    return
                 if url.path != "/":
                     self.send_error(404)
                     return
                 saved = "ok=1" in (urlsplit(self.path).query or "")
                 self.send_page(f'<div class="ok">{html.escape(tr("Opgeslagen"))}</div>' if saved else "")
+
+            def send_shot(self):
+                data = server.screenshot()
+                if data is None:
+                    self.send_error(503)
+                    return
+                self.send_response(200)
+                self.send_header("Content-Type", "image/png")
+                self.send_header("Content-Length", str(len(data)))
+                self.send_header("Content-Disposition",
+                                 f'inline; filename="spotischerm-{time.strftime("%Y%m%d-%H%M%S")}.png"')
+                self.send_header("Cache-Control", "no-store")
+                self.end_headers()
+                self.wfile.write(data)
 
             def do_POST(self):
                 # Alleen formulieren van deze pagina zelf, niet van een andere website.
